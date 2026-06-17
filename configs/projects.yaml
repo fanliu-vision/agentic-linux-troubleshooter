@@ -1,0 +1,49 @@
+projects:
+  - project_id: enterprise_demo_local
+    name: Enterprise Order Monitoring Service Remote Localhost Demo
+    mode: remote
+    owner: lf
+    owner_contact: console
+
+    ssh:
+      user: lf
+      host: localhost
+      port: 22
+
+    remote_project_dir: /home/lf/runtime_projects/enterprise_order_monitoring_service
+    run_command: python3 run_service.py --config config.json
+
+    log_files:
+      - /home/lf/runtime_projects/enterprise_order_monitoring_service/outputs/service.log
+
+    monitor:
+      interval_seconds: 5
+      tail_lines: 200
+      auto_report: true
+      max_events_per_run: 5
+
+    policy:
+      auto_recover: true
+      rollback_on_failure: true
+      auto_rerun_after_apply: true
+      allow_auto_apply:
+        - fix-network-1
+        - fix-gpu-1
+      escalation_required:
+        - disk
+        - slurm
+        - process_kill
+        - permission
+
+    notification:
+      enabled: true
+      channels:
+        - console
+        - file
+      alerts_dir: outputs/alerts
+      webhook_url: ""
+      webhook_url_env: ""
+      notify_on_recovered: true
+      notify_on_escalation: true
+      notify_on_rollback: true
+      notify_on_report_only: true

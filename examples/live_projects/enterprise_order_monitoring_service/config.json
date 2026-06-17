@@ -1,0 +1,13 @@
+{
+  "service_name": "enterprise-order-monitoring-service",
+  "environment": "staging",
+  "metrics_host": "127.0.0.1",
+  "metrics_port": 9100,
+  "simulate_port_conflict": true,
+  "simulate_disk_full": true,
+  "simulate_python_env_mismatch": true,
+  "fail_on_python_env": false,
+  "cache_dir": "/tmp/acme_order_cache",
+  "input_file": "data/orders.jsonl",
+  "output_dir": "outputs"
+}

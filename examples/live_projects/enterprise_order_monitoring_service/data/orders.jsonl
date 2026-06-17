@@ -1,0 +1,4 @@
+{"order_id": "A1001", "user_id": "U001", "amount": 128.5, "country": "CN", "risk_score": 0.12}
+{"order_id": "A1002", "user_id": "U002", "amount": 5320.0, "country": "US", "risk_score": 0.91}
+{"order_id": "A1003", "user_id": "U003", "amount": 78.0, "country": "JP", "risk_score": 0.08}
+{"order_id": "A1004", "user_id": "U004", "amount": 9999.0, "country": "DE", "risk_score": 0.96}

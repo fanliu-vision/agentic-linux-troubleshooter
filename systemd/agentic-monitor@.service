@@ -1,0 +1,28 @@
+[Unit]
+Description=Agentic Linux Monitor & Auto-Recovery Agent (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Runtime config for project %i.
+EnvironmentFile=/etc/agentic-linux-troubleshooter/%i.env
+
+# Keep running as a normal non-root user.
+User=__RUN_USER__
+Group=__RUN_GROUP__
+
+# Use bash so EnvironmentFile variables can be expanded safely.
+ExecStart=/usr/bin/env bash -lc 'cd "$PROJECT_ROOT" && exec "$PYTHON_BIN" main_monitor.py --config "$CONFIG_PATH" --project "%i" --daemon --agent-depth "$AGENT_DEPTH" --report-mode "$REPORT_MODE" --state-dir "$STATE_DIR" --daemon-log "$DAEMON_LOG" --heartbeat-interval "$HEARTBEAT_INTERVAL" --health-check-interval "$HEALTH_CHECK_INTERVAL"'
+
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[
+  {
+    "case_id": "multi_event_process_crash_container_k8s",
+    "log_file": "multi_event_process_crash_container_k8s.log",
+    "expected_event_types": [
+      "process_crash",
+      "container_k8s"
+    ],
+    "expected_issue_types": [
+      "process",
+      "container_k8s"
+    ],
+    "expected_action": "future_multi_event_manual_escalation_only",
+    "connected_to_core_tests": false
+  }
+]

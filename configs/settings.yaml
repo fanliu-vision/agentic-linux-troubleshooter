@@ -1,0 +1,42 @@
+model:
+  provider: deepseek
+  model_id: deepseek-chat
+  api_base: https://api.deepseek.com
+  temperature: 0.2
+
+agent:
+  max_steps: 5
+  verbosity_level: 2
+
+security:
+  command_timeout: 15
+  max_output_chars: 12000
+  allowed_command_prefixes:
+    - "df"
+    - "du"
+    - "ls"
+    - "free"
+    - "ps"
+    - "top"
+    - "whoami"
+    - "pwd"
+    - "hostname"
+    - "uptime"
+    - "nvidia-smi"
+    - "hy-smi"
+    - "squeue"
+    - "scontrol"
+    - "ss"
+    - "netstat"
+    - "lsof"
+    - "cat"
+    - "tail"
+    - "head"
+    - "grep"
+
+log:
+  default_tail_lines: 120
+  max_read_chars: 20000
+
+gpu:
+  prefer_hygon_dcu: true

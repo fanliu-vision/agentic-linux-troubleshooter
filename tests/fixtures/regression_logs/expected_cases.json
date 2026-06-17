@@ -1,0 +1,107 @@
+[
+  {
+    "case_id": "network_port_basic",
+    "log_file": "network_port_basic.log",
+    "expected_event_type": "network_port",
+    "expected_issue_type": "network_port",
+    "expected_action": "auto_recover_or_policy_checked"
+  },
+  {
+    "case_id": "gpu_oom_basic",
+    "log_file": "gpu_oom_basic.log",
+    "expected_event_type": "gpu_oom",
+    "expected_issue_type": "gpu",
+    "expected_action": "auto_recover_or_policy_checked"
+  },
+  {
+    "case_id": "disk_full_basic",
+    "log_file": "disk_full_basic.log",
+    "expected_event_type": "disk_full",
+    "expected_issue_type": "disk",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "python_env_basic",
+    "log_file": "python_env_basic.log",
+    "expected_event_type": "python_env",
+    "expected_issue_type": "python_env",
+    "expected_action": "policy_requires_explicit_allow"
+  },
+  {
+    "case_id": "slurm_basic",
+    "log_file": "slurm_basic.log",
+    "expected_event_type": "slurm",
+    "expected_issue_type": "slurm",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "process_kill_unsupported",
+    "log_file": "process_kill_unsupported.log",
+    "expected_event_type": "process_kill",
+    "expected_issue_type": "process",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "permission_denied_unsupported",
+    "log_file": "permission_denied_unsupported.log",
+    "expected_event_type": "permission_denied",
+    "expected_issue_type": "permission",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "process_crash_basic",
+    "log_file": "process_crash_basic.log",
+    "expected_event_type": "process_crash",
+    "expected_issue_type": "process",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "container_k8s_basic",
+    "log_file": "container_k8s_basic.log",
+    "expected_event_type": "container_k8s",
+    "expected_issue_type": "container_k8s",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "host_resource_basic",
+    "log_file": "host_resource_basic.log",
+    "expected_event_type": "host_resource",
+    "expected_issue_type": "host_resource",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "network_connectivity_basic",
+    "log_file": "network_connectivity_basic.log",
+    "expected_event_type": "network_connectivity",
+    "expected_issue_type": "network_connectivity",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "dependency_service_basic",
+    "log_file": "dependency_service_basic.log",
+    "expected_event_type": "dependency_service",
+    "expected_issue_type": "dependency_service",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "config_error_basic",
+    "log_file": "config_error_basic.log",
+    "expected_event_type": "config_error",
+    "expected_issue_type": "config",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "auth_cert_basic",
+    "log_file": "auth_cert_basic.log",
+    "expected_event_type": "auth_cert",
+    "expected_issue_type": "auth_cert",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "benign_info",
+    "log_file": "benign_info.log",
+    "expected_event_type": null,
+    "expected_issue_type": null,
+    "expected_action": "no_event_expected"
+  }
+]

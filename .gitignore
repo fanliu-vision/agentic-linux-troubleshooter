@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime outputs
+outputs/
+state/
+acceptance_artifacts/
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Git backup
+.git_backup*/
+empty_git_backup_*/

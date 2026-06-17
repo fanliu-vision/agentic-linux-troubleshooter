@@ -1,6 +1,6 @@
 # Agentic Linux Monitoring & Auto-Recovery Agent
 
-面向 Linux/企业服务日志的监控、事件检测、自动恢复、通知与排障报告系统。
+面向 Linux/企业服务日志的 Agentic 运维系统，集成事件审计、自动恢复、通知归档与排障分析报告。
 
 ## 1. 项目简介
 
@@ -48,6 +48,21 @@ systemd 长期守护
 - remote log tail 保留尾部修复，避免长 tail 输出截断掉最新故障行。
 - 自动恢复安全边界：危险操作默认不自动执行。
 - 核心测试基线：`scripts/run_core_tests.sh`。
+
+## 架构概览
+
+| 目录 | 作用 |
+|---|---|
+| `monitors/` | 监控循环、日志 watcher、状态管理、daemon 日志 |
+| `detectors/` | 故障事件识别与 `ErrorEvent` 生成 |
+| `policies/` | 自动恢复、人工升级和只报告策略 |
+| `recovery/` | 安全恢复执行器与恢复结果记录 |
+| `notifiers/` | 通知分发与 alerts 归档 |
+| `agents/` | 排障分析与报告生成 |
+| `sessions/` | 排障会话编排、证据汇总和报告入口 |
+| `configs/` | 项目配置与监控目标配置 |
+| `tests/` | 核心测试、故障域回归和专项测试 |
+| `docs/` | 验收、设计、测试计划和模板文档 |
 
 ## 3. 支持的故障域
 
@@ -104,6 +119,16 @@ systemd 长期守护
 
 R11 已对报告模板做小幅优化：事件报告固定包含“安全边界”和“验证方式”，`post_notification` 报告更短，多事件报告要求每个 event 保持独立 evidence、处置策略和状态说明。
 
+## 输出产物
+
+运行过程中会生成以下产物，用于事件审计、故障复盘和安全追踪：
+
+- `outputs/monitors/`：事件排障报告、通知后报告、`cycle_summary`。
+- `outputs/alerts/`：告警 Markdown、JSONL 和 latest alert。
+- `state/<project_id>/project_status.json`：项目运行状态。
+- `state/<project_id>/daemon.log`：daemon 运行日志。
+- `seen_fingerprints`：持久化去重状态，用于避免重复处理同一事件。
+
 ## 6. 运行方式
 
 建议先创建虚拟环境并安装依赖：
@@ -124,7 +149,7 @@ python main_monitor.py \
   --project enterprise_demo_local \
   --cycles 1 \
   --agent-depth balanced \
-  --report-mode llm
+  --report-mode rule
 ```
 
 daemon 模式：
@@ -135,7 +160,7 @@ python main_monitor.py \
   --project enterprise_demo_local \
   --daemon \
   --agent-depth balanced \
-  --report-mode llm
+  --report-mode rule
 ```
 
 systemd 状态查看：
@@ -145,7 +170,7 @@ systemctl status agentic-monitor@enterprise_demo_local.service --no-pager -l
 journalctl -u agentic-monitor@enterprise_demo_local.service -f
 ```
 
-如果没有配置 LLM API Key，`--report-mode auto` 可以回退到规则报告模式。不要把 API Key 写入代码或提交到 Git。
+如已配置 LLM API Key，可使用 `--report-mode llm` 或 `--report-mode auto`。不要把 API Key 写入代码或提交到 Git。
 
 ## 7. 测试
 
@@ -173,7 +198,7 @@ scripts/run_core_tests.sh
 - R10 multi-event live smoke 通过，同一日志窗口中 `process_crash` 与 `container_k8s` 均可生成独立 report/alert。
 - R10 remote log tail 截断问题已修复，日志 tail 场景保留尾部故障行。
 - R11 报告模板质量审计与小幅优化完成。
-- R12 本地 Git baseline 已建立，包含稳定 commit 和 `stage6e-r11-stable` tag；远程推送取决于 GitHub 凭据配置。
+- R12 GitHub 版本基线已建立，`main` 分支和 `stage6e-r11-stable` tag 已推送到远程仓库。
 
 ## 9. 项目定位
 

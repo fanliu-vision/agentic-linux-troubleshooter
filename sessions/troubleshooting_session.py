@@ -923,16 +923,21 @@ class TroubleshootingSession:
         text = self._combined_evidence_text().lower()
         return any(keyword.lower() in text for keyword in keywords)
 
-    def _build_interactive_evidence_result(self) -> AgentResult:
+    def _build_interactive_evidence_result(
+            self,
+            evidence_items: List[EvidenceItem] | None = None,
+    ) -> AgentResult:
         """
         Build an AgentResult that explicitly summarizes interactive evidence
         collected during the session. This helps LLMReportAgent use user-added
         evidence and readonly command outputs.
         """
+        items = list(evidence_items) if evidence_items is not None else self.evidence_items
+
         evidence_lines = []
         analysis_lines = []
 
-        for item in self.evidence_items:
+        for item in items:
             evidence_lines.append(
                 f"[{item.source}] {item.title} command={item.command if item.command else '<none>'}"
             )
@@ -1000,7 +1005,7 @@ class TroubleshootingSession:
                 )
 
         raw_parts = []
-        for item in self.evidence_items:
+        for item in items:
             raw_parts.append(item.to_text())
 
         return AgentResult(
@@ -1021,14 +1026,18 @@ class TroubleshootingSession:
             raw_output="\n\n".join(raw_parts),
         )
 
-    def _build_rerun_history_text(self) -> str:
+    def _build_rerun_history_text(
+            self,
+            evidence_items: List[EvidenceItem] | None = None,
+    ) -> str:
         """
         Collect all project rerun evidence as raw text.
         This helps the report layer understand whether the final rerun succeeded.
         """
+        items = list(evidence_items) if evidence_items is not None else self.evidence_items
         items = [
             item.to_text()
-            for item in self.evidence_items
+            for item in items
             if item.source == "project_rerun"
         ]
         return "\n\n".join(items)
@@ -1377,25 +1386,58 @@ class TroubleshootingSession:
     def generate_report(
             self,
             report_intent: str = "event_troubleshooting",
+            evidence_items: List[EvidenceItem] | None = None,
     ) -> tuple[str, Path, str]:
-        self._refresh_route()
+        if evidence_items is None:
+            self._refresh_route()
+            report_route = dict(self.route)
+            report_evidence_items = self.evidence_items
+        else:
+            report_evidence_items = list(evidence_items)
+            self._write_combined_evidence()
+            report_route = classify_issue_dict(
+                "帮我分析当前监控事件 evidence",
+                content_preview="\n".join(item.content for item in report_evidence_items),
+            )
 
         orchestrator = MultiAgentOrchestratorV3(
-            route=self.route,
+            route=report_route,
             agent_depth=self.agent_depth,  # type: ignore[arg-type]
         )
         workflow_result = orchestrator.run()
         workflow_result["route"] = dict(workflow_result["route"])
         workflow_result["route"]["report_intent"] = report_intent
-        interactive_result = self._build_interactive_evidence_result()
+        interactive_result = self._build_interactive_evidence_result(
+            evidence_items=report_evidence_items,
+        )
         workflow_result["results"].append(interactive_result)
-        session_outcome_result = self._build_session_outcome_result()
+        session_outcome_result = self._build_session_outcome_result(
+            route=report_route,
+            evidence_items=report_evidence_items,
+        )
         workflow_result["results"].append(session_outcome_result)
-        auto_recovery_result = self._build_auto_recovery_result()
+        include_scoped_auto_recovery = (
+            evidence_items is None
+            or any(item.source == "auto_recovery" for item in report_evidence_items)
+        )
+        include_scoped_notification = (
+            evidence_items is None
+            or any(item.source == "notification" for item in report_evidence_items)
+        )
+
+        auto_recovery_result = (
+            self._build_auto_recovery_result()
+            if include_scoped_auto_recovery
+            else None
+        )
         if auto_recovery_result:
             workflow_result["results"].append(auto_recovery_result)
 
-        notification_result = self._build_notification_result()
+        notification_result = (
+            self._build_notification_result()
+            if include_scoped_notification
+            else None
+        )
         if notification_result:
             workflow_result["results"].append(notification_result)
 
@@ -1474,17 +1516,24 @@ class TroubleshootingSession:
 
         return ""
 
-    def _infer_initial_failure_summary(self) -> str:
+    def _infer_initial_failure_summary(
+            self,
+            route: Dict[str, Any] | None = None,
+            evidence_items: List[EvidenceItem] | None = None,
+    ) -> str:
         """
         Infer initial failure type from route and evidence.
         """
+        route_data = route if route is not None else self.route
+        items = list(evidence_items) if evidence_items is not None else self.evidence_items
+
         primary = str(
-            self.route.get("primary_issue_type")
-            or self.route.get("issue_type")
+            route_data.get("primary_issue_type")
+            or route_data.get("issue_type")
             or "unknown"
         )
 
-        text = self._combined_evidence_text().lower()
+        text = "\n".join(item.content for item in items).lower()
 
         if "hip out of memory" in text:
             return "初始运行失败主要表现为 HIP/DCU 显存不足。"
@@ -1503,7 +1552,11 @@ class TroubleshootingSession:
 
         return f"初始运行失败主类型为 {primary}。"
 
-    def _build_session_outcome_result(self) -> AgentResult:
+    def _build_session_outcome_result(
+            self,
+            route: Dict[str, Any] | None = None,
+            evidence_items: List[EvidenceItem] | None = None,
+    ) -> AgentResult:
         """
         Build a resolution-oriented AgentResult for Stage 4C.
 
@@ -1511,7 +1564,10 @@ class TroubleshootingSession:
         If it succeeded, the final report should become a fix-verification report,
         not just a diagnosis report.
         """
-        initial_failure = self._infer_initial_failure_summary()
+        initial_failure = self._infer_initial_failure_summary(
+            route=route,
+            evidence_items=evidence_items,
+        )
 
         if self.latest_rerun_success:
             summary = (
@@ -1608,7 +1664,7 @@ class TroubleshootingSession:
                 "rerun 成功只能证明当前复现命令在当前配置下不再报错。",
                 "如果正式训练参数、数据规模、运行节点或 Slurm 资源配置变化，仍需再次验证。",
             ],
-            raw_output=self._build_rerun_history_text(),
+            raw_output=self._build_rerun_history_text(evidence_items=evidence_items),
         )
 
     def record_notification_result(

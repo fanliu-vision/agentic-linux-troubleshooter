@@ -314,6 +314,8 @@ class MonitorLoop:
         print(f"fingerprint: {event.fingerprint}")
         print("=" * 100)
 
+        event_evidence_start = len(self.session.evidence_items)
+
         self.session.add_evidence(
             content=event.to_evidence_text(),
             source="monitor_error_event",
@@ -402,6 +404,7 @@ class MonitorLoop:
 
                 report, save_path, source = self.session.generate_report(
                     report_intent="post_notification",
+                    evidence_items=self.session.evidence_items[event_evidence_start:],
                 )
                 save_path = Path(save_path)
 

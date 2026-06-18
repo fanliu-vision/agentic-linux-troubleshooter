@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from detectors import ErrorEvent
 from monitors.project_registry import ProjectConfig
 from policies import RemediationDecision, RemediationPolicy
-from sessions import TroubleshootingSession
+from sessions import EvidenceItem, TroubleshootingSession
 
 
 @dataclass
@@ -117,6 +117,7 @@ class AutoRecoveryRunner:
     def recover(self, event: ErrorEvent) -> AutoRecoveryResult:
         issue_type = getattr(event, "issue_type", getattr(event, "event_type", "unknown"))
         decision = self.policy.decide(event=event, project=self.project)
+        report_scope_start = self._find_event_evidence_start(event)
         print("[Stage6C] AutoRecoveryRunner.recover() called")
         print(f"[Stage6C] event_type={event.event_type}, issue_type={event.issue_type}")
         print(f"[Stage6C] project_auto_recover={self.project.policy.auto_recover}")
@@ -140,7 +141,10 @@ class AutoRecoveryRunner:
                 "[Escalation] 当前事件不满足自动修复条件，已进入负责人通知 / 报告流程。"
             )
             self._record_result(result)
-            self._generate_report(result)
+            self._generate_report(
+                result,
+                evidence_items=self.session.evidence_items[report_scope_start:],
+            )
             return result
 
         result.messages.append(
@@ -159,7 +163,10 @@ class AutoRecoveryRunner:
                 self._rollback(result)
 
             self._record_result(result)
-            self._generate_report(result)
+            self._generate_report(
+                result,
+                evidence_items=self.session.evidence_items[report_scope_start:],
+            )
             return result
 
         except Exception as exc:
@@ -169,8 +176,24 @@ class AutoRecoveryRunner:
                 self._rollback(result)
 
             self._record_result(result)
-            self._generate_report(result)
+            self._generate_report(
+                result,
+                evidence_items=self.session.evidence_items[report_scope_start:],
+            )
             return result
+
+    def _find_event_evidence_start(self, event: ErrorEvent) -> int:
+        fingerprint = getattr(event, "fingerprint", "")
+
+        if not fingerprint:
+            return len(self.session.evidence_items)
+
+        for index in range(len(self.session.evidence_items) - 1, -1, -1):
+            item = self.session.evidence_items[index]
+            if fingerprint in item.content:
+                return index
+
+        return len(self.session.evidence_items)
 
     def _generate_fix_plan_if_possible(self, result: AutoRecoveryResult) -> None:
         try:
@@ -249,12 +272,18 @@ class AutoRecoveryRunner:
 
         result.rollback_executed = True
 
-    def _generate_report(self, result: AutoRecoveryResult) -> None:
+    def _generate_report(
+        self,
+        result: AutoRecoveryResult,
+        evidence_items: list[EvidenceItem] | None = None,
+    ) -> None:
         from datetime import datetime
         from pathlib import Path
         import shutil
 
-        report, save_path, source = self.session.generate_report()
+        report, save_path, source = self.session.generate_report(
+            evidence_items=evidence_items,
+        )
 
         save_path = Path(save_path)
 

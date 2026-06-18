@@ -224,6 +224,44 @@ def test_more_than_three_events_only_processes_first_three() -> None:
         assert events[3].fingerprint not in loop.seen_fingerprints
 
 
+def test_same_event_type_report_rate_limit_suppresses_third_instance() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        events = [
+            make_event("process_crash", "process", "same-type-1"),
+            make_event("process_crash", "process", "same-type-2"),
+            make_event("process_crash", "process", "same-type-3"),
+        ]
+        loop, _ = make_loop(tmp, events)
+        handled: list[ErrorEvent] = []
+        summary_calls: list[list[CycleEventRecord]] = []
+
+        loop._handle_event = lambda event: handled.append(event) or make_record(event)
+
+        def write_summary(records: list[CycleEventRecord]) -> str:
+            summary_calls.append(records)
+            return str(Path(tmp) / "cycle.md")
+
+        loop._write_cycle_summary_report = write_summary
+
+        detected = loop.run_once()
+
+        assert detected == events[:2]
+        assert handled == events[:2]
+        assert events[0].fingerprint in loop.seen_fingerprints
+        assert events[1].fingerprint in loop.seen_fingerprints
+        assert events[2].fingerprint not in loop.seen_fingerprints
+        assert len(summary_calls) == 1
+        assert [record.fingerprint for record in summary_calls[0]] == [
+            events[0].fingerprint,
+            events[1].fingerprint,
+        ]
+
+        health = loop.state_store.load().runtime_health
+        assert health["health_status"] == "ok"
+        assert health["last_events_detected"] == 2
+        assert health["rate_limited_reports"] == 1
+
+
 def test_legacy_detect_fallback_still_handles_single_event() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         event = make_event("process_crash", "process", "legacy")

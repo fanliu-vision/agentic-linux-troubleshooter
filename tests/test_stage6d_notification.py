@@ -11,6 +11,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from detectors import ErrorEvent
 from monitors.project_registry import NotificationConfig, PolicyConfig, ProjectConfig
+from monitors.rate_limit_tracker import RateLimitTracker
 from notifiers import NotificationManager
 from notifiers.file_notifier import FileNotifier
 from notifiers.notification_manager import NotificationMessage
@@ -88,6 +89,43 @@ def test_stage6d_file_notification() -> None:
         assert "test_project" in latest
         assert "fix-network-1" in latest
         assert "recovered" in latest
+
+
+def test_notification_manager_rate_limits_duplicate_fingerprint() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        alerts_dir = str(Path(tmp) / "alerts")
+        project = make_project(alerts_dir)
+        tracker = RateLimitTracker()
+
+        event = ErrorEvent(
+            event_type="network_port",
+            issue_type="network_port",
+            severity="medium",
+            summary="端口占用或服务绑定失败",
+            source="test",
+            raw_excerpt="OSError: [Errno 98] Address already in use",
+            signature="same duplicate alert fingerprint",
+        )
+
+        manager = NotificationManager(project, rate_limit_tracker=tracker)
+
+        first = manager.notify_recovery(event, FakeRecoveryResult())
+        second = manager.notify_recovery(event, FakeRecoveryResult())
+
+        assert any("[Notifier][File]" in item for item in first)
+        assert second == [
+            (
+                "[Notifier][RateLimit] alert suppressed because fingerprint was "
+                f"already alerted: event_type=network_port, fingerprint={event.fingerprint}"
+            )
+        ]
+
+        jsonl_path = Path(alerts_dir) / "test_project_alerts.jsonl"
+        archive_dir = Path(alerts_dir) / "test_project_alerts"
+
+        assert len(jsonl_path.read_text(encoding="utf-8").splitlines()) == 1
+        assert len(list(archive_dir.glob("*.md"))) == 1
+        assert len(list(archive_dir.glob("*.json"))) == 1
 
 
 def test_file_notifier_alert_archive_append_and_safe_names() -> None:
@@ -200,6 +238,7 @@ def test_notification_manager_reports_unsupported_channels() -> None:
 
 def main() -> None:
     test_stage6d_file_notification()
+    test_notification_manager_rate_limits_duplicate_fingerprint()
     test_file_notifier_alert_archive_append_and_safe_names()
     test_notification_manager_reports_unsupported_channels()
     print("=" * 100)

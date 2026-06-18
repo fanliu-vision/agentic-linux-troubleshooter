@@ -14,6 +14,7 @@ from recovery import AutoRecoveryRunner
 from notifiers import NotificationManager
 from monitors.daemon_logger import DaemonLogger
 from monitors.health_checker import ProjectHealthChecker
+from monitors.rate_limit_tracker import RateLimitTracker
 from monitors.state_store import MonitorStateStore, ProjectMonitorState
 from monitors.cycle_summary_reporter import CycleEventRecord, CycleSummaryReporter
 
@@ -60,11 +61,15 @@ class MonitorLoop:
 
         self.session = self._build_session()
         self.watcher = self._build_watcher()
+        self.rate_limit_tracker = RateLimitTracker()
         self.recovery_runner = AutoRecoveryRunner(
             project=self.project,
             session=self.session,
         )
-        self.notification_manager = NotificationManager(project=self.project)
+        self.notification_manager = NotificationManager(
+            project=self.project,
+            rate_limit_tracker=self.rate_limit_tracker,
+        )
         self.state_dir = state_dir
         self.heartbeat_interval = heartbeat_interval
         self.health_check_interval = health_check_interval
@@ -141,6 +146,21 @@ class MonitorLoop:
         for path in paths:
             if path and path not in self.reports_generated:
                 self.reports_generated.append(path)
+
+    def _expected_reports_for_event(self) -> int:
+        return 2 if self.project.monitor.auto_report else 1
+
+    def _count_alert_results(self, notify_results: list[str]) -> int:
+        count = 0
+
+        for item in notify_results:
+            if item.startswith("[Notifier][RateLimit]"):
+                continue
+            if item == "[Notifier] notification skipped by project notification policy.":
+                continue
+            count += 1
+
+        return count
 
 
     def _select_events_for_cycle(self, events: list[ErrorEvent]) -> list[ErrorEvent]:
@@ -309,6 +329,8 @@ class MonitorLoop:
             time.sleep(min(1, max(0, end_time - time.time())))
 
     def _begin_cycle_health(self) -> None:
+        self.rate_limit_tracker.begin_cycle()
+
         started_ts = self._now_ts()
         started_at = self._now_text()
 
@@ -398,6 +420,15 @@ class MonitorLoop:
                 "llm_fallback_used": bool(self._current_cycle_llm_fallback_used),
                 "health_status": self._current_cycle_health_status,
                 "health_message": self._current_cycle_health_message,
+                "rate_limited_events": len(
+                    self.rate_limit_tracker.cycle.suppressed_events
+                ),
+                "rate_limited_reports": len(
+                    self.rate_limit_tracker.cycle.suppressed_reports
+                ),
+                "rate_limited_alerts": len(
+                    self.rate_limit_tracker.cycle.suppressed_alerts
+                ),
             }
         )
         self.project_state.runtime_health = runtime_health
@@ -497,8 +528,10 @@ class MonitorLoop:
             )
 
         if self.enable_persistent_state:
-            # 这里只统计实际 dispatch 返回的结果条数。skip 也会被记录为一条结果。
-            self.project_state.notifications_sent_total += len(notify_results)
+            # 这里只统计实际 dispatch 返回的结果条数，限流和策略 skip 不计入 alert 产出。
+            self.project_state.notifications_sent_total += self._count_alert_results(
+                notify_results
+            )
             self.state_store.save(self.project_state)
 
         print("")
@@ -618,6 +651,11 @@ class MonitorLoop:
                     )
                     continue
 
+                event_limit = self.rate_limit_tracker.allow_event(event)
+                if not event_limit.allowed:
+                    self.daemon_logger.warning(event_limit.reason)
+                    continue
+
                 is_auto_recover_candidate = self._is_auto_recover_candidate(event)
                 if (
                     is_auto_recover_candidate
@@ -633,6 +671,16 @@ class MonitorLoop:
 
                 if is_auto_recover_candidate:
                     auto_recover_candidates_handled += 1
+
+                report_limit = self.rate_limit_tracker.reserve_report_capacity(
+                    event,
+                    expected_reports=self._expected_reports_for_event(),
+                )
+                if not report_limit.allowed:
+                    self.daemon_logger.warning(report_limit.reason)
+                    continue
+
+                self.rate_limit_tracker.record_event_handled()
 
                 try:
                     record = self._handle_event(event)
@@ -678,18 +726,24 @@ class MonitorLoop:
 
             if cycle_records:
                 try:
-                    summary_path = self._write_cycle_summary_report(cycle_records)
+                    summary_limit = self.rate_limit_tracker.reserve_cycle_report()
+                    if not summary_limit.allowed:
+                        self.daemon_logger.warning(summary_limit.reason)
+                        summary_path = ""
+                    else:
+                        summary_path = self._write_cycle_summary_report(cycle_records)
 
-                    # cycle summary 是确定性主报告，放到 reports_generated 最前面
-                    if summary_path in self.reports_generated:
-                        self.reports_generated.remove(summary_path)
+                    if summary_path:
+                        # cycle summary 是确定性主报告，放到 reports_generated 最前面
+                        if summary_path in self.reports_generated:
+                            self.reports_generated.remove(summary_path)
 
-                    self.reports_generated.insert(0, summary_path)
+                        self.reports_generated.insert(0, summary_path)
 
-                    if self.enable_persistent_state:
-                        self.project_state.reports_generated_total += 1
-                        self.project_state.last_report_path = summary_path
-                        self.state_store.save(self.project_state)
+                        if self.enable_persistent_state:
+                            self.project_state.reports_generated_total += 1
+                            self.project_state.last_report_path = summary_path
+                            self.state_store.save(self.project_state)
                 except Exception as exc:
                     self._record_cycle_degraded(
                         exc,

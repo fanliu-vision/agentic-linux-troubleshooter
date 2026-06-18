@@ -6,6 +6,7 @@ from typing import Any
 
 from detectors import ErrorEvent
 from monitors.project_registry import ProjectConfig
+from monitors.rate_limit_tracker import RateLimitTracker
 
 
 @dataclass
@@ -81,8 +82,13 @@ class NotificationMessage:
 
 
 class NotificationManager:
-    def __init__(self, project: ProjectConfig) -> None:
+    def __init__(
+            self,
+            project: ProjectConfig,
+            rate_limit_tracker: RateLimitTracker | None = None,
+    ) -> None:
         self.project = project
+        self.rate_limit_tracker = rate_limit_tracker
 
     def should_notify(self, message: NotificationMessage) -> bool:
         config = self.project.notification
@@ -134,6 +140,11 @@ class NotificationManager:
 
         if not self.should_notify(message):
             return ["[Notifier] notification skipped by project notification policy."]
+
+        if self.rate_limit_tracker is not None:
+            decision = self.rate_limit_tracker.reserve_alert_capacity(event)
+            if not decision.allowed:
+                return [f"[Notifier][RateLimit] {decision.reason}"]
 
         return self._dispatch(message)
 

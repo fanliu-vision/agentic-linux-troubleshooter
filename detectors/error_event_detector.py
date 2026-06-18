@@ -366,7 +366,7 @@ class ErrorEventDetector:
             if not matches:
                 continue
 
-            for group in self._group_rule_line_matches(matches):
+            for group in self._group_rule_line_matches(matches, lines):
                 matched_line_numbers = [line_number for line_number, _ in group]
                 first_line = min(matched_line_numbers)
                 last_line = max(matched_line_numbers)
@@ -430,30 +430,64 @@ class ErrorEventDetector:
     def _group_rule_line_matches(
         self,
         matches: list[tuple[int, str]],
+        lines: list[str],
     ) -> list[list[tuple[int, str]]]:
         groups: list[list[tuple[int, str]]] = []
         current: list[tuple[int, str]] = []
+        current_marker = ""
         last_line_number = 0
 
         for line_number, keyword in matches:
+            line = lines[line_number - 1] if 0 < line_number <= len(lines) else ""
+            marker = self._extract_event_marker(line)
+
             if not current:
                 current = [(line_number, keyword)]
+                current_marker = marker
                 last_line_number = line_number
                 continue
 
-            if line_number - last_line_number <= self.DETECT_ALL_BLOCK_GAP_LINES:
+            same_line = line_number == last_line_number
+            nearby = line_number - last_line_number <= self.DETECT_ALL_BLOCK_GAP_LINES
+            marker_changed = (
+                bool(marker)
+                and bool(current_marker)
+                and marker != current_marker
+                and not same_line
+            )
+
+            if nearby and not marker_changed:
                 current.append((line_number, keyword))
+                if not current_marker and marker:
+                    current_marker = marker
                 last_line_number = max(last_line_number, line_number)
                 continue
 
             groups.append(current)
             current = [(line_number, keyword)]
+            current_marker = marker
             last_line_number = line_number
 
         if current:
             groups.append(current)
 
         return groups
+
+    def _extract_event_marker(self, line: str) -> str:
+        key_value_marker = re.search(
+            r"\b[A-Za-z0-9_]*SMOKE_ID\s*[:=]\s*([A-Za-z0-9_.:-]+)",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if key_value_marker:
+            return key_value_marker.group(1).lower()
+
+        for token in re.findall(r"\b[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+){2,}\b", line):
+            normalized = token.lower()
+            if "smoke" in normalized or "process-crash" in normalized or re.match(r"r\d+[-_]", normalized):
+                return normalized
+
+        return ""
 
     def _dedupe_detect_all_events(self, events: list[ErrorEvent]) -> list[ErrorEvent]:
         result: list[ErrorEvent] = []

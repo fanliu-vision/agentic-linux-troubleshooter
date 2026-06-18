@@ -179,6 +179,7 @@ class MonitorLoop:
 
         selected.sort(
             key=lambda event: (
+                event.fingerprint in self.seen_fingerprints,
                 priority.get(event.event_type, 999),
                 -severity_rank.get(event.severity, 0),
                 event.line_number,

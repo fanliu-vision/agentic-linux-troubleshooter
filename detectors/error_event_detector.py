@@ -299,6 +299,7 @@ class ErrorEventDetector:
         "medium": 2,
         "low": 1,
     }
+    DETECT_ALL_BLOCK_GAP_LINES: ClassVar[int] = 3
 
     def detect(self, text: str, source: str) -> list[ErrorEvent]:
         """
@@ -342,56 +343,72 @@ class ErrorEventDetector:
 
     def detect_all(self, text: str, source: str) -> list[ErrorEvent]:
         """
-        Return one scoped candidate event per event_type for a log window.
+        Return scoped candidate events for a log window.
 
         This is the R10 multi-event detector API. It is detection-only: it does
         not run recovery, send notifications, write reports, or mutate state.
         The existing detect() API remains the compatibility path for current
         callers.
+
+        A single tail window may contain old and new instances of the same
+        event_type. Build one event per local matching block so an old seen
+        fingerprint cannot represent a later distinct failure.
         """
         if not text or not text.strip():
             return []
 
         normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
         lines = normalized_text.splitlines()
-        events: list[ErrorEvent] = []
+        ordered_events: list[tuple[int, int, ErrorEvent]] = []
 
-        for rule in self.RULES:
+        for rule_index, rule in enumerate(self.RULES):
             matches = self._collect_rule_line_matches(rule, lines)
             if not matches:
                 continue
 
-            matched_line_numbers = [line_number for line_number, _ in matches]
-            raw_excerpt = "\n".join(
-                lines[line_number - 1]
-                for line_number in matched_line_numbers
-            ).strip()
-            matched_keywords = self._unique_keywords(
-                keyword for _, keyword in matches
-            )
-            first_keyword = matched_keywords[0] if matched_keywords else rule.event_type
-            signature = self._build_signature(raw_excerpt, first_keyword)
-
-            events.append(
-                ErrorEvent(
-                    event_type=rule.event_type,
-                    issue_type=rule.issue_type,
-                    severity=rule.severity,
-                    summary=rule.summary,
-                    source=source,
-                    matched_keywords=matched_keywords,
-                    raw_excerpt=raw_excerpt,
-                    signature=signature,
-                    line_number=matched_line_numbers[0],
-                    span_start=0,
-                    span_end=0,
+            for group in self._group_rule_line_matches(matches):
+                matched_line_numbers = [line_number for line_number, _ in group]
+                first_line = min(matched_line_numbers)
+                last_line = max(matched_line_numbers)
+                raw_excerpt = "\n".join(lines[index - 1] for index in range(first_line, last_line + 1)).strip()
+                matched_keywords = self._unique_keywords(
+                    keyword for _, keyword in group
                 )
+                first_keyword = matched_keywords[0] if matched_keywords else rule.event_type
+                signature = self._build_signature(raw_excerpt, first_keyword)
+
+                ordered_events.append(
+                    (
+                        first_line,
+                        rule_index,
+                        ErrorEvent(
+                            event_type=rule.event_type,
+                            issue_type=rule.issue_type,
+                            severity=rule.severity,
+                            summary=rule.summary,
+                            source=source,
+                            matched_keywords=matched_keywords,
+                            raw_excerpt=raw_excerpt,
+                            signature=signature,
+                            line_number=first_line,
+                            span_start=0,
+                            span_end=0,
+                        ),
+                    )
+                )
+
+        events = [
+            event
+            for _, _, event in sorted(
+                ordered_events,
+                key=lambda item: (item[0], item[1]),
             )
+        ]
 
         if any(event.issue_type != "log" for event in events):
             events = [event for event in events if event.issue_type != "log"]
 
-        return events
+        return self._dedupe_detect_all_events(events)
 
     def _collect_rule_line_matches(self, rule: ErrorRule, lines: list[str]) -> list[tuple[int, str]]:
         matches: list[tuple[int, str]] = []
@@ -409,6 +426,48 @@ class ErrorEventDetector:
                 seen_line_numbers.add(line_number)
 
         return matches
+
+    def _group_rule_line_matches(
+        self,
+        matches: list[tuple[int, str]],
+    ) -> list[list[tuple[int, str]]]:
+        groups: list[list[tuple[int, str]]] = []
+        current: list[tuple[int, str]] = []
+        last_line_number = 0
+
+        for line_number, keyword in matches:
+            if not current:
+                current = [(line_number, keyword)]
+                last_line_number = line_number
+                continue
+
+            if line_number - last_line_number <= self.DETECT_ALL_BLOCK_GAP_LINES:
+                current.append((line_number, keyword))
+                last_line_number = max(last_line_number, line_number)
+                continue
+
+            groups.append(current)
+            current = [(line_number, keyword)]
+            last_line_number = line_number
+
+        if current:
+            groups.append(current)
+
+        return groups
+
+    def _dedupe_detect_all_events(self, events: list[ErrorEvent]) -> list[ErrorEvent]:
+        result: list[ErrorEvent] = []
+        seen_keys: set[tuple[str, str]] = set()
+
+        for event in events:
+            key = (event.event_type, event.fingerprint)
+            if key in seen_keys:
+                continue
+
+            result.append(event)
+            seen_keys.add(key)
+
+        return result
 
     def _unique_keywords(self, keywords: Iterable[str]) -> list[str]:
         result: list[str] = []

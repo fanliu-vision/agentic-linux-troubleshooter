@@ -137,8 +137,8 @@ class MonitorLoop:
     def _select_events_for_cycle(self, events: list[ErrorEvent]) -> list[ErrorEvent]:
         """
         Stage 6E: 一个日志轮询周期里可能出现多个错误。
-        这里按 event_type 聚合，避免 gpu_oom/slurm 这类重复事件占满 max_events_per_run，
-        导致 python_env/network_port 没有机会进入恢复策略。
+        这里按 event_type + fingerprint 聚合，保留同一 event_type 的不同实例，
+        避免旧 fingerprint 抢占同窗口中新出现的同类故障。
         """
         if not events:
             return []
@@ -159,28 +159,29 @@ class MonitorLoop:
             "network_port": 50,
         }
 
-        selected_by_type: dict[str, ErrorEvent] = {}
+        selected_by_identity: dict[tuple[str, str], ErrorEvent] = {}
 
         for event in events:
-            key = event.event_type
+            key = (event.event_type, event.fingerprint)
 
-            if key not in selected_by_type:
-                selected_by_type[key] = event
+            if key not in selected_by_identity:
+                selected_by_identity[key] = event
                 continue
 
-            old = selected_by_type[key]
+            old = selected_by_identity[key]
             old_score = severity_rank.get(old.severity, 0)
             new_score = severity_rank.get(event.severity, 0)
 
             if new_score > old_score:
-                selected_by_type[key] = event
+                selected_by_identity[key] = event
 
-        selected = list(selected_by_type.values())
+        selected = list(selected_by_identity.values())
 
         selected.sort(
             key=lambda event: (
                 priority.get(event.event_type, 999),
                 -severity_rank.get(event.severity, 0),
+                event.line_number,
             )
         )
 
@@ -481,6 +482,10 @@ class MonitorLoop:
 
         for event in events_to_handle:
             if event.fingerprint in self.seen_fingerprints:
+                self.daemon_logger.info(
+                    f"event skipped because fingerprint already seen: "
+                    f"event_type={event.event_type}, fingerprint={event.fingerprint}"
+                )
                 continue
 
             is_auto_recover_candidate = self._is_auto_recover_candidate(event)

@@ -86,6 +86,26 @@ def make_loop(project_id: str, state_dir: str, output_root: str, event: ErrorEve
     return loop
 
 
+def assert_runtime_health_fields(health: dict) -> None:
+    expected_fields = {
+        "last_cycle_started_at",
+        "last_cycle_finished_at",
+        "last_cycle_duration_seconds",
+        "last_events_detected",
+        "last_reports_generated",
+        "last_alerts_generated",
+        "last_error",
+        "last_exception_type",
+        "daemon_pid",
+        "daemon_uptime_seconds",
+        "llm_fallback_used",
+        "health_status",
+        "health_message",
+    }
+
+    assert expected_fields <= set(health)
+
+
 def test_handle_event_failure_does_not_mark_seen() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         event = make_event("failure")
@@ -105,6 +125,15 @@ def test_handle_event_failure_does_not_mark_seen() -> None:
         assert loop.project_state.status == "event_handling_failed"
         assert loop.project_state.idle_cycles == 0
 
+        health = loop.state_store.load().runtime_health
+        assert_runtime_health_fields(health)
+        assert health["health_status"] == "degraded"
+        assert health["health_message"] == "event handling failed; daemon continued"
+        assert health["last_exception_type"] == "RuntimeError"
+        assert "boom" in health["last_error"]
+        assert health["last_events_detected"] == 0
+        assert health["last_reports_generated"] == 0
+
 
 def test_handle_event_success_marks_seen() -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -123,6 +152,19 @@ def test_handle_event_success_marks_seen() -> None:
         assert events == [event]
         assert event.fingerprint in loop.seen_fingerprints
         assert event.fingerprint in loop.state_store.seen_fingerprints()
+
+        health = loop.state_store.load().runtime_health
+        assert_runtime_health_fields(health)
+        assert health["health_status"] == "ok"
+        assert health["health_message"] == "monitor cycle completed"
+        assert health["last_events_detected"] == 1
+        assert health["last_reports_generated"] == 1
+        assert health["last_alerts_generated"] == 0
+        assert health["last_error"] == ""
+        assert health["last_exception_type"] == ""
+        assert health["daemon_pid"] > 0
+        assert health["daemon_uptime_seconds"] >= 0
+        assert health["llm_fallback_used"] is False
 
 
 def test_successful_event_generates_cycle_summary() -> None:
@@ -172,6 +214,15 @@ def test_cycle_summary_failure_does_not_crash_run_once() -> None:
         assert events == [event]
         assert event.fingerprint in loop.seen_fingerprints
         assert loop.reports_generated == []
+
+        health = loop.state_store.load().runtime_health
+        assert_runtime_health_fields(health)
+        assert health["health_status"] == "degraded"
+        assert health["health_message"] == "cycle summary report generation failed; daemon continued"
+        assert health["last_exception_type"] == "RuntimeError"
+        assert "summary failed" in health["last_error"]
+        assert health["last_events_detected"] == 1
+        assert health["last_reports_generated"] == 0
 
 
 def main() -> None:

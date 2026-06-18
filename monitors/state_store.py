@@ -37,6 +37,7 @@ class ProjectMonitorState:
     last_report_path: str = ""
 
     seen_fingerprints: list[str] = field(default_factory=list)
+    runtime_health: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -59,6 +60,7 @@ class ProjectMonitorState:
             "last_event_fingerprint": self.last_event_fingerprint,
             "last_report_path": self.last_report_path,
             "seen_fingerprints": self.seen_fingerprints,
+            "runtime_health": self.runtime_health,
         }
 
     @classmethod
@@ -84,6 +86,12 @@ class ProjectMonitorState:
 
         raw_seen = data.get("seen_fingerprints") or []
         state.seen_fingerprints = [str(item) for item in raw_seen]
+
+        raw_runtime_health = data.get("runtime_health") or {}
+        if isinstance(raw_runtime_health, dict):
+            state.runtime_health = dict(raw_runtime_health)
+        else:
+            state.runtime_health = {}
 
         return state
 

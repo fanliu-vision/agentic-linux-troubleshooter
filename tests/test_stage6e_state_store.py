@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -25,6 +26,12 @@ def test_stage6e_state_store_save_and_load() -> None:
         state.events_detected_total = 2
         state.last_event_type = "network_port"
         state.seen_fingerprints = ["abc", "def"]
+        state.runtime_health = {
+            "health_status": "ok",
+            "last_cycle_started_at": "2026-06-18 10:00:00",
+            "last_cycle_finished_at": "2026-06-18 10:00:01",
+            "last_events_detected": 1,
+        }
 
         store.save(state)
 
@@ -36,8 +43,15 @@ def test_stage6e_state_store_save_and_load() -> None:
         assert loaded.events_detected_total == 2
         assert loaded.last_event_type == "network_port"
         assert set(loaded.seen_fingerprints) == {"abc", "def"}
+        assert loaded.runtime_health["health_status"] == "ok"
+        assert loaded.runtime_health["last_events_detected"] == 1
 
         assert store.status_path.exists()
+
+        raw_status = json.loads(store.status_path.read_text(encoding="utf-8"))
+        assert raw_status["status"] == "running"
+        assert raw_status["run_count"] == 3
+        assert raw_status["runtime_health"]["health_status"] == "ok"
 
 
 def test_stage6e_mark_seen() -> None:

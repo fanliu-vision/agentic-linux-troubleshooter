@@ -266,6 +266,13 @@ def test_cycle_summary_failure_does_not_affect_successful_events() -> None:
         assert event2.fingerprint in loop.seen_fingerprints
         assert loop.reports_generated == []
 
+        health = loop.state_store.load().runtime_health
+        assert health["health_status"] == "degraded"
+        assert health["last_exception_type"] == "RuntimeError"
+        assert "summary failed" in health["last_error"]
+        assert health["last_events_detected"] == 2
+        assert health["last_reports_generated"] == 0
+
 
 def test_auto_recovery_candidates_are_limited_to_one_per_cycle() -> None:
     with tempfile.TemporaryDirectory() as tmp:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -96,6 +97,14 @@ class MonitorLoop:
         self._last_heartbeat_ts = 0.0
         self._last_health_check_ts = 0.0
         self._stop_requested = False
+        self._daemon_started_ts = self._now_ts()
+        self._active_cycle_started_ts: float | None = None
+        self._active_cycle_started_at = ""
+        self._current_cycle_health_status = "ok"
+        self._current_cycle_health_message = "monitor cycle completed"
+        self._current_cycle_last_error = ""
+        self._current_cycle_last_exception_type = ""
+        self._current_cycle_llm_fallback_used = False
 
         self.daemon_logger.info(
             f"MonitorLoop initialized: project_id={self.project.project_id}, "
@@ -299,6 +308,103 @@ class MonitorLoop:
 
             time.sleep(min(1, max(0, end_time - time.time())))
 
+    def _begin_cycle_health(self) -> None:
+        started_ts = self._now_ts()
+        started_at = self._now_text()
+
+        self._active_cycle_started_ts = started_ts
+        self._active_cycle_started_at = started_at
+        self._current_cycle_health_status = "ok"
+        self._current_cycle_health_message = "monitor cycle completed"
+        self._current_cycle_last_error = ""
+        self._current_cycle_last_exception_type = ""
+        self._current_cycle_llm_fallback_used = False
+
+        runtime_health = dict(self.project_state.runtime_health or {})
+        runtime_health.update(
+            {
+                "last_cycle_started_at": started_at,
+                "daemon_pid": os.getpid(),
+                "daemon_uptime_seconds": round(
+                    max(0.0, started_ts - self._daemon_started_ts),
+                    3,
+                ),
+                "health_status": "running",
+                "health_message": "monitor cycle in progress",
+            }
+        )
+        self.project_state.runtime_health = runtime_health
+
+        if self.enable_persistent_state:
+            self.state_store.save(self.project_state)
+
+    def _record_cycle_degraded(self, exc: Exception, message: str) -> None:
+        self._current_cycle_health_status = "degraded"
+        self._current_cycle_health_message = message
+        self._current_cycle_last_error = str(exc)
+        self._current_cycle_last_exception_type = type(exc).__name__
+
+    def _record_cycle_degraded_text(
+            self,
+            error: str,
+            exception_type: str,
+            message: str,
+    ) -> None:
+        self._current_cycle_health_status = "degraded"
+        self._current_cycle_health_message = message
+        self._current_cycle_last_error = error
+        self._current_cycle_last_exception_type = exception_type
+
+    def _record_llm_fallback_from_source(self, source: str) -> None:
+        if "fallback" in source.lower():
+            self._current_cycle_llm_fallback_used = True
+
+    def _record_llm_fallback_from_messages(self, messages: list[str]) -> None:
+        for message in messages:
+            if "fallback" in message.lower():
+                self._current_cycle_llm_fallback_used = True
+                return
+
+    def _finish_cycle_health(
+            self,
+            events_detected: int,
+            reports_generated: int,
+            alerts_generated: int,
+    ) -> None:
+        finished_ts = self._now_ts()
+        finished_at = self._now_text()
+        started_ts = self._active_cycle_started_ts or finished_ts
+        started_at = self._active_cycle_started_at or finished_at
+
+        runtime_health = dict(self.project_state.runtime_health or {})
+        runtime_health.update(
+            {
+                "last_cycle_started_at": started_at,
+                "last_cycle_finished_at": finished_at,
+                "last_cycle_duration_seconds": round(
+                    max(0.0, finished_ts - started_ts),
+                    3,
+                ),
+                "last_events_detected": int(events_detected),
+                "last_reports_generated": int(reports_generated),
+                "last_alerts_generated": int(alerts_generated),
+                "last_error": self._current_cycle_last_error,
+                "last_exception_type": self._current_cycle_last_exception_type,
+                "daemon_pid": os.getpid(),
+                "daemon_uptime_seconds": round(
+                    max(0.0, finished_ts - self._daemon_started_ts),
+                    3,
+                ),
+                "llm_fallback_used": bool(self._current_cycle_llm_fallback_used),
+                "health_status": self._current_cycle_health_status,
+                "health_message": self._current_cycle_health_message,
+            }
+        )
+        self.project_state.runtime_health = runtime_health
+
+        if self.enable_persistent_state:
+            self.state_store.save(self.project_state)
+
 
     def _handle_event(self, event: ErrorEvent) -> CycleEventRecord | None:
         print("")
@@ -330,6 +436,7 @@ class MonitorLoop:
         # 只要进入监控事件，就统一进入 AutoRecoveryRunner。
         # 是否自动修复，由 RemediationPolicy 根据 projects.yaml 决定。
         recovery_result = self.recovery_runner.recover(event)
+        self._record_llm_fallback_from_messages(recovery_result.messages)
         self._append_report_paths(recovery_result.report_paths)
         if self.enable_persistent_state:
             self.project_state.reports_generated_total += len(recovery_result.report_paths)
@@ -361,6 +468,14 @@ class MonitorLoop:
             event=event,
             recovery_result=recovery_result,
         )
+        for notify_result in notify_results:
+            if "[ERROR]" in notify_result:
+                self._record_cycle_degraded_text(
+                    error=notify_result,
+                    exception_type="NotificationError",
+                    message="notification dispatch reported an error; daemon continued",
+                )
+                break
 
         notification_status = (
             "recovered"
@@ -406,6 +521,7 @@ class MonitorLoop:
                     report_intent="post_notification",
                     evidence_items=self.session.evidence_items[event_evidence_start:],
                 )
+                self._record_llm_fallback_from_source(source)
                 save_path = Path(save_path)
 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -431,6 +547,10 @@ class MonitorLoop:
                 )
 
             except Exception as exc:
+                self._record_cycle_degraded(
+                    exc,
+                    "post-notification report generation failed; daemon continued",
+                )
                 self.daemon_logger.warning(
                     f"failed to generate post-notification report: "
                     f"{type(exc).__name__}: {exc}"
@@ -458,115 +578,153 @@ class MonitorLoop:
         return record
 
     def run_once(self) -> list[ErrorEvent]:
-        chunks = self.watcher.poll()
+        self._begin_cycle_health()
+        reports_before = len(self.reports_generated)
+        alerts_before = self.project_state.notifications_sent_total
+
         detected_events: list[ErrorEvent] = []
         cycle_records: list[CycleEventRecord] = []
         candidate_events: list[ErrorEvent] = []
         failed_events = 0
         auto_recover_candidates_handled = 0
 
-        if not chunks:
-            print("[Monitor][WARN] no log chunks read.")
-            print(
-                "[Monitor][WARN] This may mean log_files do not exist, "
-                "are empty, or watcher starts from EOF."
-            )
-            self.daemon_logger.warning(
-                "no log chunks read; log_files may not exist, be empty, or watcher starts from EOF."
-            )
+        try:
+            chunks = self.watcher.poll()
 
-        for chunk in chunks:
-            events = self._detect_events_for_chunk(
-                text=chunk.content,
-                source=f"{chunk.source}:{chunk.path}",
-            )
-            candidate_events.extend(events)
-
-        events_to_handle = self._select_events_for_cycle(candidate_events)
-
-        for event in events_to_handle:
-            if event.fingerprint in self.seen_fingerprints:
-                self.daemon_logger.info(
-                    f"event skipped because fingerprint already seen: "
-                    f"event_type={event.event_type}, fingerprint={event.fingerprint}"
+            if not chunks:
+                print("[Monitor][WARN] no log chunks read.")
+                print(
+                    "[Monitor][WARN] This may mean log_files do not exist, "
+                    "are empty, or watcher starts from EOF."
                 )
-                continue
-
-            is_auto_recover_candidate = self._is_auto_recover_candidate(event)
-            if (
-                is_auto_recover_candidate
-                and auto_recover_candidates_handled >= self.MAX_AUTO_RECOVER_PER_CYCLE
-            ):
-                # R10-3b safety guard: delay extra auto-recover candidates rather
-                # than allowing one monitor cycle to execute multiple fixes.
                 self.daemon_logger.warning(
-                    f"auto recovery candidate skipped by per-cycle limit: "
-                    f"fingerprint={event.fingerprint}, event_type={event.event_type}"
+                    "no log chunks read; log_files may not exist, be empty, or watcher starts from EOF."
                 )
-                continue
 
-            if is_auto_recover_candidate:
-                auto_recover_candidates_handled += 1
-
-            try:
-                record = self._handle_event(event)
-            except Exception as exc:
-                failed_events += 1
-                self.daemon_logger.warning(
-                    f"event handling failed; fingerprint will not be marked seen: "
-                    f"fingerprint={event.fingerprint}, event_type={event.event_type}, "
-                    f"error={type(exc).__name__}: {exc}"
+            for chunk in chunks:
+                events = self._detect_events_for_chunk(
+                    text=chunk.content,
+                    source=f"{chunk.source}:{chunk.path}",
                 )
-                continue
+                candidate_events.extend(events)
 
-            if record is not None:
-                self._mark_event_seen(event)
-                detected_events.append(event)
-                cycle_records.append(record)
+            events_to_handle = self._select_events_for_cycle(candidate_events)
 
-        if failed_events and not detected_events:
-            print("[Monitor][WARN] error events detected but handling failed.")
-            self.project_state.status = "event_handling_failed"
+            for event in events_to_handle:
+                if event.fingerprint in self.seen_fingerprints:
+                    self.daemon_logger.info(
+                        f"event skipped because fingerprint already seen: "
+                        f"event_type={event.event_type}, fingerprint={event.fingerprint}"
+                    )
+                    continue
 
-            if self.enable_persistent_state:
-                self.state_store.save(self.project_state)
-        elif not detected_events:
-            print("[Monitor] no new error events.")
-            self.project_state.idle_cycles += 1
+                is_auto_recover_candidate = self._is_auto_recover_candidate(event)
+                if (
+                    is_auto_recover_candidate
+                    and auto_recover_candidates_handled >= self.MAX_AUTO_RECOVER_PER_CYCLE
+                ):
+                    # R10-3b safety guard: delay extra auto-recover candidates rather
+                    # than allowing one monitor cycle to execute multiple fixes.
+                    self.daemon_logger.warning(
+                        f"auto recovery candidate skipped by per-cycle limit: "
+                        f"fingerprint={event.fingerprint}, event_type={event.event_type}"
+                    )
+                    continue
 
-            if self.project_state.last_health_status == "warning":
-                self.project_state.status = "health_warning"
-            else:
-                self.project_state.status = "idle"
+                if is_auto_recover_candidate:
+                    auto_recover_candidates_handled += 1
 
-            if self.enable_persistent_state:
-                self.state_store.save(self.project_state)
-        else:
-            self.project_state.idle_cycles = 0
-            if self.enable_persistent_state:
-                self.state_store.save(self.project_state)
+                try:
+                    record = self._handle_event(event)
+                except Exception as exc:
+                    failed_events += 1
+                    self._record_cycle_degraded(
+                        exc,
+                        "event handling failed; daemon continued",
+                    )
+                    self.daemon_logger.warning(
+                        f"event handling failed; fingerprint will not be marked seen: "
+                        f"fingerprint={event.fingerprint}, event_type={event.event_type}, "
+                        f"error={type(exc).__name__}: {exc}"
+                    )
+                    continue
 
-        if cycle_records:
-            try:
-                summary_path = self._write_cycle_summary_report(cycle_records)
+                if record is not None:
+                    self._mark_event_seen(event)
+                    detected_events.append(event)
+                    cycle_records.append(record)
 
-                # cycle summary 是确定性主报告，放到 reports_generated 最前面
-                if summary_path in self.reports_generated:
-                    self.reports_generated.remove(summary_path)
-
-                self.reports_generated.insert(0, summary_path)
+            if failed_events and not detected_events:
+                print("[Monitor][WARN] error events detected but handling failed.")
+                self.project_state.status = "event_handling_failed"
 
                 if self.enable_persistent_state:
-                    self.project_state.reports_generated_total += 1
-                    self.project_state.last_report_path = summary_path
                     self.state_store.save(self.project_state)
-            except Exception as exc:
-                self.daemon_logger.warning(
-                    f"failed to generate cycle summary report: "
-                    f"{type(exc).__name__}: {exc}"
-                )
+            elif not detected_events:
+                print("[Monitor] no new error events.")
+                self.project_state.idle_cycles += 1
 
-        return detected_events
+                if self.project_state.last_health_status == "warning":
+                    self.project_state.status = "health_warning"
+                else:
+                    self.project_state.status = "idle"
+
+                if self.enable_persistent_state:
+                    self.state_store.save(self.project_state)
+            else:
+                self.project_state.idle_cycles = 0
+                if self.enable_persistent_state:
+                    self.state_store.save(self.project_state)
+
+            if cycle_records:
+                try:
+                    summary_path = self._write_cycle_summary_report(cycle_records)
+
+                    # cycle summary 是确定性主报告，放到 reports_generated 最前面
+                    if summary_path in self.reports_generated:
+                        self.reports_generated.remove(summary_path)
+
+                    self.reports_generated.insert(0, summary_path)
+
+                    if self.enable_persistent_state:
+                        self.project_state.reports_generated_total += 1
+                        self.project_state.last_report_path = summary_path
+                        self.state_store.save(self.project_state)
+                except Exception as exc:
+                    self._record_cycle_degraded(
+                        exc,
+                        "cycle summary report generation failed; daemon continued",
+                    )
+                    self.daemon_logger.warning(
+                        f"failed to generate cycle summary report: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+
+            self._finish_cycle_health(
+                events_detected=len(detected_events),
+                reports_generated=max(0, len(self.reports_generated) - reports_before),
+                alerts_generated=max(
+                    0,
+                    self.project_state.notifications_sent_total - alerts_before,
+                ),
+            )
+
+            return detected_events
+
+        except Exception as exc:
+            self._record_cycle_degraded(
+                exc,
+                "monitor cycle raised an exception",
+            )
+            self._finish_cycle_health(
+                events_detected=len(detected_events),
+                reports_generated=max(0, len(self.reports_generated) - reports_before),
+                alerts_generated=max(
+                    0,
+                    self.project_state.notifications_sent_total - alerts_before,
+                )
+            )
+            raise
 
 
     def run_daemon(

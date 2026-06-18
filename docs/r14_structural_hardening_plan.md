@@ -74,6 +74,10 @@ R13 的主要经验如下：
 - 最近错误或 warning 摘要；
 - health check PASS/PARTIAL/FAIL 风险提示。
 
+R14-2 已开始实现 `project_status / health check` 增强，优先在 `project_status.json` 中追加兼容的 `runtime_health` 子对象，记录最近 cycle 开始/结束时间、cycle 耗时、events/reports/alerts 计数、daemon pid/uptime、LLM fallback 使用状态，以及 `ok/degraded` 健康状态和最近异常信息。
+
+该实现保持旧字段兼容，不修改 detector、policy、AutoRecoveryRunner，不新增自动恢复逻辑，也不扩大 `auto_recover` 权限。
+
 ### R14-3：retention 与 log rotation 设计
 
 设计 `daemon.log` 轮转与 `outputs/reports/alerts` 保留策略。优先提供 dry-run 和审计输出，先观察将被清理的对象，再决定是否启用实际清理。

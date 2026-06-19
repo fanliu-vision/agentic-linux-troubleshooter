@@ -1,0 +1,153 @@
+# R15-2 offline example only.
+# This file is documentation, not a runtime config.
+auto_recovery_policy:
+  schema_version: "r15.2"
+  default_strategy: "manual_escalation"
+  unknown_event_strategy: "diagnose_only"
+  dry_run_default: true
+
+  global_limits:
+    max_auto_recover_per_cycle: 1
+    max_auto_recover_per_hour: 3
+
+  cooldown:
+    fingerprint_seconds: 3600
+    event_type_seconds: 1800
+    project_seconds: 600
+
+  rate_limits:
+    max_per_cycle: 1
+    max_per_hour: 3
+
+  precheck:
+    required: true
+    require_target_match: true
+    require_evidence: true
+    require_rollback_available: true
+    require_low_risk: true
+
+  rollback:
+    required: true
+    rollback_fix_id: rollback-network-1
+    verify_after_rollback: true
+
+  forbidden_actions:
+    - kill -9
+    - rm -rf
+    - pip install
+    - systemctl restart
+    - systemctl stop
+    - kubectl delete
+    - kubectl apply
+    - 权限提升
+    - 跨主机破坏性操作
+
+  action_allowlist:
+    fix-network-1:
+      risk_level: low
+      requires_project_allow: true
+      requires_precheck: true
+      requires_rollback: true
+    fix-gpu-1:
+      risk_level: low
+      requires_project_allow: true
+      requires_precheck: true
+      requires_rollback: true
+
+  event_type_policies:
+    network_port:
+      strategy_layer: safe_auto_recover
+      risk_level: low
+      confidence_required: 0.85
+      allowed_fix_ids:
+        - fix-network-1
+      forbidden_actions:
+        - systemctl restart
+        - kill -9
+      require_precheck: true
+      require_rollback: true
+      require_operator_confirmation: false
+      cooldown:
+        fingerprint_seconds: 3600
+        event_type_seconds: 1800
+        project_seconds: 600
+      rate_limits:
+        max_per_cycle: 1
+        max_per_hour: 3
+      audit_required: true
+      fallback_strategy: manual_escalation
+      rollback:
+        required: true
+        rollback_fix_id: rollback-network-1
+        verify_after_rollback: true
+
+    gpu_oom:
+      strategy_layer: safe_auto_recover
+      risk_level: low
+      confidence_required: 0.85
+      allowed_fix_ids:
+        - fix-gpu-1
+      require_precheck: true
+      require_rollback: true
+      require_operator_confirmation: false
+      cooldown:
+        fingerprint_seconds: 3600
+        event_type_seconds: 1800
+        project_seconds: 600
+      rate_limits:
+        max_per_cycle: 1
+        max_per_hour: 3
+      audit_required: true
+      fallback_strategy: manual_escalation
+
+    process_crash:
+      strategy_layer: manual_escalation
+      risk_level: high
+      confidence_required: 0.80
+      allowed_fix_ids: []
+      require_precheck: false
+      require_rollback: false
+      require_operator_confirmation: true
+      audit_required: true
+      fallback_strategy: manual_escalation
+
+    container_k8s:
+      strategy_layer: manual_escalation
+      risk_level: high
+      allowed_fix_ids: []
+      forbidden_actions:
+        - kubectl delete
+        - kubectl apply
+      require_operator_confirmation: true
+      audit_required: true
+      fallback_strategy: manual_escalation
+
+    dangerous_action_guard:
+      strategy_layer: disabled
+      risk_level: critical
+      allowed_fix_ids: []
+      forbidden_actions:
+        - kill -9
+        - rm -rf
+        - systemctl stop
+        - kubectl delete
+      require_operator_confirmation: true
+      audit_required: true
+      fallback_strategy: disabled
+
+  audit:
+    required: true
+    fields:
+      - event_type
+      - fingerprint
+      - strategy_layer
+      - selected_policy
+      - action
+      - precheck_result
+      - cooldown_result
+      - rate_limit_result
+      - rollback_available
+      - execution_result
+      - rollback_result
+      - downgrade_reason
+      - created_at

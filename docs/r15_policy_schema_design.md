@@ -633,3 +633,32 @@ guarded dry-run 的保守策略：
 | unknown `event_type` | `diagnose_only` 或 `manual_escalation` |
 
 guarded dry-run audit record 必须记录 policy、precheck、cooldown、rollback、operator required、downgrade reason、forbidden action、execution result 和 created_at。R15-5 不写真实 `state/` 或 `outputs/`。
+
+## 15. R15-6 audit 与 report/alert 集成设计
+
+R15-6 新增 `docs/r15_auto_recovery_audit_integration_design.md`，设计 auto_recovery audit 如何进入 future report/alert。该阶段仅做集成设计和阶段总结，不修改 report/alert 运行逻辑，不写真实 `state/` 或 `outputs/`，不接入 `AutoRecoveryRunner`。
+
+建议 future report/alert 使用 audit summary，而不是直接根据 LLM 或报告文本推断恢复状态。audit summary 至少应包含：
+
+- `strategy_layer`；
+- `candidate_fix_id`；
+- `would_execute`；
+- `dry_run`；
+- `precheck_result`；
+- `cooldown_result`；
+- `rollback_available`；
+- `operator_required`；
+- `downgrade_reason`；
+- `execution_result`；
+- `rollback_result`。
+
+R15-6 明确以下边界：
+
+- audit 不授权执行；
+- report/alert 不绕过 policy；
+- LLM 不改变 `strategy_layer`；
+- forbidden action 不转化为执行；
+- dry-run 不得视为已执行；
+- rate limit 不得隐藏恢复失败或 forbidden action。
+
+R15 阶段总结见 `docs/r15_auto_recovery_strategy_report.md`。

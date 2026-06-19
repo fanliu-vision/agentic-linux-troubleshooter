@@ -476,3 +476,42 @@ R15 后续阶段建议：
 | R15-6 | 审计与 report/alert 集成 | 设计 audit record 如何进入 report/alert，并确认限流下仍保留关键安全信息。 |
 
 R15-2 不执行真实恢复，不修改真实 configs，不新增恢复动作，不扩大 `auto_recover` 权限。
+
+## 12. R15-3 validator / resolver 实现说明
+
+R15-3 新增独立模块 `policies/auto_recovery_policy.py`，用于把 R15-2 schema 设计转换为结构化校验和策略解析结果。该模块提供以下对象：
+
+- `StrategyLayer`
+- `RiskLevel`
+- `PolicyValidationError`
+- `EventTypePolicy`
+- `AutoRecoveryPolicy`
+- `AutoRecoveryDecision`
+- `validate_policy()`
+- `resolve_policy_for_event()`
+
+R15-3 的实现边界如下：
+
+- 只做 policy schema validator / resolver；
+- 不接入 `MonitorLoop`；
+- 不接入 `AutoRecoveryRunner`；
+- 不修改既有 `RemediationPolicy` 运行逻辑；
+- 不读取或修改真实 `configs/projects.yaml`；
+- 不新增恢复动作；
+- 不扩大 `auto_recover` 权限；
+- resolver 返回的 `safe_auto_recover` 只表示策略候选，不表示已经执行恢复。
+
+R15-3 resolver 保持保守默认：
+
+| event_type | 默认解析结果 |
+| --- | --- |
+| 未知 `event_type` | `diagnose_only` 或 `manual_escalation`，不得自动恢复 |
+| `process_crash` | `manual_escalation` |
+| `container_k8s` | `manual_escalation` |
+| `disk_full` | `manual_escalation` |
+| `python_env` | `manual_escalation` |
+| `auth_cert` | `manual_escalation` |
+| `network_port` | 仅在命中显式允许的 `fix-network-1` 时返回 `safe_auto_recover` candidate |
+| `gpu_oom` | 仅在命中显式允许的 `fix-gpu-1` 时返回 `safe_auto_recover` candidate |
+
+该实现不会改变当前真实可执行恢复范围。R15-3 后，真实恢复仍由既有运行链路、既有 policy allowlist 和既有 AutoRecoveryRunner 边界决定。

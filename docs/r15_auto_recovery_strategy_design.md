@@ -258,6 +258,8 @@ R15 后续阶段建议按以下路线推进：
 | R15-5 | 审计与 report/alert 集成 | 设计 audit record 如何进入 report/alert，并确认 rate limit 下仍保留关键失败和回滚信息。 |
 | R15-6 | R15 验收总结 | 汇总策略分层、安全边界、测试结果、剩余风险和是否进入后续实现阶段。 |
 
+R15-5 已进一步明确 guarded auto_recover 的 dry-run 边界：guarded candidate 可以表达 policy、precheck、cooldown、rollback 和 audit 结果，但本阶段 `would_execute=false`、`dry_run=true`，真实执行结果固定为 `not_run_guarded_dry_run`。这意味着 `guarded_auto_recover` 仍不是新增真实恢复动作，也不会扩大当前 `auto_recover` 权限。
+
 ## 12. 结论
 
 R15-1 仅完成自动恢复策略安全分层设计，不新增恢复动作，不扩大自动恢复权限。

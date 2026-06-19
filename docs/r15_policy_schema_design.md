@@ -573,3 +573,63 @@ R15-4 的安全边界：
 - `safe_auto_recover` 在 dry-run 中最多表示 `auto_recover_allowed=true` 且 `dry_run=true`，不能表示已经执行。
 
 R15-4 示例 YAML 中新增 `r15_dry_run_sample_events`，仅用于文档和测试样例，不属于真实运行配置，也不会被现有运行链路读取。
+
+## 14. R15-5 guarded auto_recover dry-run 说明
+
+R15-5 新增独立模块 `recovery/guarded_auto_recover_dry_run.py`，用于表达 future guarded auto_recover 的 dry-run 决策和审计模型。该模块不接入真实恢复执行路径，不调用 `AutoRecoveryRunner`，不新增恢复动作，不扩大 `auto_recover` 权限。
+
+guarded dry-run 输入包括：
+
+```text
+event_type
+fingerprint
+candidate_fix_id
+strategy_layer
+policy_decision
+precheck_result
+cooldown_result
+rollback_available
+```
+
+guarded dry-run 输出包括：
+
+```text
+event_type
+fingerprint
+strategy_layer
+candidate_fix_id
+would_execute
+dry_run
+allowed_by_policy
+precheck_passed
+cooldown_allowed
+rollback_available
+operator_required
+downgrade_reason
+audit_record
+```
+
+R15-5 固定执行边界：
+
+```text
+would_execute=false
+dry_run=true
+execution_result=not_run_guarded_dry_run
+```
+
+`allowed_by_policy=true` 只表示 policy candidate、precheck、cooldown、rollback 和 forbidden-action 检查都满足 guarded dry-run 条件，不表示已经执行恢复。任何真实恢复仍由既有运行链路、既有 policy allowlist 和既有 `AutoRecoveryRunner` 边界决定。
+
+guarded dry-run 的保守策略：
+
+| 场景 | dry-run 结果 |
+| --- | --- |
+| `network_port + fix-network-1` | 可生成 guarded dry-run candidate，但不执行 |
+| `gpu_oom + fix-gpu-1` | 可生成 guarded dry-run candidate，但不扩大动作范围 |
+| `process_crash` | `manual_escalation` |
+| `container_k8s` | 不允许 `kubectl`，命中禁用动作时 `disabled` |
+| `disk_full` | 不允许 `rm -rf`，命中禁用动作时 `disabled` |
+| `python_env` | 不允许 `pip install`，命中禁用动作时 `disabled` |
+| `auth_cert` | `manual_escalation`，不得自动替换证书 |
+| unknown `event_type` | `diagnose_only` 或 `manual_escalation` |
+
+guarded dry-run audit record 必须记录 policy、precheck、cooldown、rollback、operator required、downgrade reason、forbidden action、execution result 和 created_at。R15-5 不写真实 `state/` 或 `outputs/`。

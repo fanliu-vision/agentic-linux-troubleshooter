@@ -80,6 +80,8 @@ R16：新增/细化故障域
 
 建议优先进入 R15-7，前提是仍然只针对已有低风险 fix_id 做 controlled validation，例如既有 `network_port` / `fix-network-1` 和 `gpu_oom` / `fix-gpu-1` 范围内的受控验证。
 
+R15-7 已按该范围完成受控验证：`network_port / fix-network-1` 与 `gpu_oom / fix-gpu-1` 均可被 resolver 识别为 `safe_auto_recover` candidate，并可通过 policy dry-run 和 guarded dry-run 生成审计结果。该验证仍保持 `would_execute=false`，未执行真实恢复，未扩大真实 `auto_recover` 权限。
+
 后续原则：
 
 - 如需扩权，仅从已有低风险 fix_id 开始；

@@ -161,3 +161,12 @@ R15-6 集成设计必须保持以下边界：
 | 真实执行单独验证 | 仅针对已有低风险 fix_id，单独设计 controlled validation |
 
 任何真实执行集成都必须独立阶段实施，并重新验证 policy、precheck、cooldown、rollback、audit、report 和 alert 的一致性。
+
+## R15-7 controlled validation 补充
+
+R15-7 使用既有低风险候选验证 audit 模型：
+
+- `network_port / fix-network-1`；
+- `gpu_oom / fix-gpu-1`。
+
+验证重点是 resolver、policy dry-run 和 guarded dry-run 是否能生成一致的 `safe_auto_recover` candidate 与 audit record。该验证不执行恢复动作，不调用真实 `AutoRecoveryRunner` 执行动作，不写真实 `state/outputs`。

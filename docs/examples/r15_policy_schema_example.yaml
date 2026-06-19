@@ -151,3 +151,41 @@ auto_recovery_policy:
       - rollback_result
       - downgrade_reason
       - created_at
+
+r15_dry_run_sample_events:
+  - event_type: network_port
+    fingerprint: fp-network-safe
+    confidence: 0.95
+    candidate_fix_id: fix-network-1
+  - event_type: network_port
+    fingerprint: fp-network-unknown
+    confidence: 0.95
+    candidate_fix_id: unknown-fix
+  - event_type: gpu_oom
+    fingerprint: fp-gpu-safe
+    confidence: 0.95
+    candidate_fix_id: fix-gpu-1
+  - event_type: process_crash
+    fingerprint: fp-process-crash
+    confidence: 0.95
+    candidate_fix_id: ""
+  - event_type: container_k8s
+    fingerprint: fp-container
+    confidence: 0.95
+    candidate_fix_id: ""
+  - event_type: disk_full
+    fingerprint: fp-disk
+    confidence: 0.95
+    candidate_fix_id: ""
+  - event_type: auth_cert
+    fingerprint: fp-auth
+    confidence: 0.95
+    candidate_fix_id: ""
+  - event_type: unknown_event_type
+    fingerprint: fp-unknown
+    confidence: 0.95
+    candidate_fix_id: fix-network-1
+  - event_type: network_port
+    fingerprint: fp-forbidden
+    confidence: 0.95
+    candidate_fix_id: kill -9

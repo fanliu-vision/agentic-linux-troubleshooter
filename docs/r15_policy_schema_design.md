@@ -515,3 +515,61 @@ R15-3 resolver 保持保守默认：
 | `gpu_oom` | 仅在命中显式允许的 `fix-gpu-1` 时返回 `safe_auto_recover` candidate |
 
 该实现不会改变当前真实可执行恢复范围。R15-3 后，真实恢复仍由既有运行链路、既有 policy allowlist 和既有 AutoRecoveryRunner 边界决定。
+
+## 13. R15-4 policy schema dry-run 说明
+
+R15-4 新增独立 dry-run 模块 `policies/auto_recovery_policy_dry_run.py`，用于离线读取 policy schema 示例、调用 `validate_policy()`、对样例 event 调用 `resolve_policy_for_event()`，并生成结构化 dry-run 结果和 Markdown 报告。
+
+R15-4 dry-run 输入包括：
+
+```text
+policy dict
+sample_events list
+```
+
+每个 sample event 至少包含：
+
+```text
+event_type
+fingerprint
+confidence
+candidate_fix_id
+```
+
+dry-run 输出至少包含：
+
+```text
+policy_valid
+validation_errors
+decisions
+summary
+```
+
+每个 decision 至少包含：
+
+```text
+event_type
+fingerprint
+strategy_layer
+auto_recover_allowed
+dry_run
+selected_fix_id
+downgrade_reason
+operator_required
+audit_required
+```
+
+R15-4 的安全边界：
+
+- 不执行任何恢复动作；
+- 不调用 `AutoRecoveryRunner`；
+- 不接入 `MonitorLoop`；
+- 不修改 detector；
+- 不修改真实 `configs/projects.yaml`；
+- 默认不写任何文件；
+- 如需写 dry-run report，只允许写入测试临时目录或 `acceptance_artifacts/`；
+- 不写真实 `state/`；
+- 不写真实 `outputs/`；
+- `safe_auto_recover` 在 dry-run 中最多表示 `auto_recover_allowed=true` 且 `dry_run=true`，不能表示已经执行。
+
+R15-4 示例 YAML 中新增 `r15_dry_run_sample_events`，仅用于文档和测试样例，不属于真实运行配置，也不会被现有运行链路读取。

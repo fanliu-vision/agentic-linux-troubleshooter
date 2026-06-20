@@ -2,91 +2,15 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from monitors.project_registry import ProjectConfig
-
-
-@dataclass(frozen=True)
-class FixFieldCandidate:
-    field_path: str
-    new_value: Any
-
-
-@dataclass(frozen=True)
-class FixSafetySpec:
-    event_type: str
-    fix_id: str
-    relative_config_path: str
-    candidates: tuple[FixFieldCandidate, ...]
-    low_risk_reason: str
-
-
-SAFE_FIX_SAFETY_SPECS: dict[str, FixSafetySpec] = {
-    "fix-network-1": FixSafetySpec(
-        event_type="network_port",
-        fix_id="fix-network-1",
-        relative_config_path="config.json",
-        candidates=(FixFieldCandidate("metrics_port", 9101),),
-        low_risk_reason="only edits the metrics port JSON field",
-    ),
-    "fix-gpu-1": FixSafetySpec(
-        event_type="gpu_oom",
-        fix_id="fix-gpu-1",
-        relative_config_path="config.json",
-        candidates=(
-            FixFieldCandidate("batch_size", 4),
-            FixFieldCandidate("train_batch_size", 4),
-            FixFieldCandidate("per_device_train_batch_size", 4),
-            FixFieldCandidate("samples_per_gpu", 4),
-            FixFieldCandidate("training.batch_size", 4),
-            FixFieldCandidate("model.batch_size", 4),
-        ),
-        low_risk_reason="only lowers an explicit batch-size style JSON field",
-    ),
-    "fix-cache-1": FixSafetySpec(
-        event_type="cache_write_failed",
-        fix_id="fix-cache-1",
-        relative_config_path="config.json",
-        candidates=(
-            FixFieldCandidate("cache_enabled", False),
-            FixFieldCandidate("feature_cache_enabled", False),
-            FixFieldCandidate("cache.write_enabled", False),
-            FixFieldCandidate("simulate_cache_write_failed", False),
-            FixFieldCandidate("simulate_disk_full", False),
-        ),
-        low_risk_reason="only disables optional cache write behavior",
-    ),
-    "fix-optional-dep-1": FixSafetySpec(
-        event_type="optional_dependency_missing",
-        fix_id="fix-optional-dep-1",
-        relative_config_path="config.json",
-        candidates=(
-            FixFieldCandidate("optional_dependency_enabled", False),
-            FixFieldCandidate("optional_dependencies.internal_risk_sdk.enabled", False),
-            FixFieldCandidate("plugins.internal_risk_sdk.enabled", False),
-            FixFieldCandidate("risk_sdk_enabled", False),
-            FixFieldCandidate("simulate_python_env_mismatch", False),
-        ),
-        low_risk_reason="only disables an optional integration or demo warning flag",
-    ),
-    "fix-worker-1": FixSafetySpec(
-        event_type="worker_overload",
-        fix_id="fix-worker-1",
-        relative_config_path="config.json",
-        candidates=(
-            FixFieldCandidate("worker_concurrency", 2),
-            FixFieldCandidate("workers", 2),
-            FixFieldCandidate("max_workers", 2),
-            FixFieldCandidate("consumer_workers", 2),
-            FixFieldCandidate("worker.concurrency", 2),
-            FixFieldCandidate("server.workers", 2),
-        ),
-        low_risk_reason="only lowers an explicit worker concurrency JSON field",
-    ),
-}
+from safe_recovery.registry import (
+    SAFE_RECOVERY_SPECS_BY_FIX_ID as SAFE_FIX_SAFETY_SPECS,
+    SafeRecoveryFieldCandidate as FixFieldCandidate,
+    SafeRecoverySpec as FixSafetySpec,
+)
 
 
 def build_runtime_precheck_result(

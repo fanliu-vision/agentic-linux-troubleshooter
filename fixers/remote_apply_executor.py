@@ -9,6 +9,11 @@ from fixers.remote_safe_config_editor import (
     RemoteConfigEditResult,
     RemoteSafeConfigEditor,
 )
+from safe_recovery.registry import (
+    SAFE_RECOVERY_FIX_IDS,
+    SafeRecoverySpec,
+    get_safe_recovery_spec_by_fix_id,
+)
 from tools.remote_ssh_executor import RemoteSSHProfile
 
 
@@ -83,63 +88,11 @@ class RemoteSafeApplyExecutor:
                 edit_results=[],
             )
 
-        if fix_id == "fix-network-1":
-            results = [
-                self.editor.update_json_field(
-                    remote_project_dir=remote_project_dir,
-                    relative_config_path="config.json",
-                    field_path="metrics_port",
-                    new_value=9101,
-                    fix_id=fix_id,
-                )
-            ]
-            return self._finalize(
-                fix_id,
-                remote_project_dir,
-                results,
-                "已远程应用端口冲突修复：metrics_port 改为 9101。",
-            )
-
-        if fix_id == "fix-gpu-1":
-            candidate_fields = [
-                "batch_size",
-                "train_batch_size",
-                "per_device_train_batch_size",
-                "samples_per_gpu",
-                "training.batch_size",
-                "model.batch_size",
-            ]
-
-            results: list[RemoteConfigEditResult] = []
-
-            for field_path in candidate_fields:
-                result = self.editor.update_json_field(
-                    remote_project_dir=remote_project_dir,
-                    relative_config_path="config.json",
-                    field_path=field_path,
-                    new_value=4,
-                    fix_id=fix_id,
-                )
-                results.append(result)
-
-                if result.success:
-                    return self._finalize(
-                        fix_id,
-                        remote_project_dir,
-                        [result],
-                        f"已远程应用 GPU OOM 修复：{field_path} 改为 4。",
-                    )
-
-            return RemoteApplyResult(
-                success=False,
-                fix_id=fix_id,
-                message=(
-                    "远程 GPU OOM 修复失败：未找到可修改的 batch size 字段。"
-                    "已检查 batch_size、train_batch_size、per_device_train_batch_size、"
-                    "samples_per_gpu、training.batch_size、model.batch_size。"
-                ),
-                edit_results=results,
-                record_path=str(self.record_path),
+        safe_spec = get_safe_recovery_spec_by_fix_id(fix_id)
+        if safe_spec is not None:
+            return self._apply_safe_registry_fix(
+                spec=safe_spec,
+                remote_project_dir=remote_project_dir,
             )
 
         if fix_id == "fix-gpu-2":
@@ -200,64 +153,6 @@ class RemoteSafeApplyExecutor:
                 "已远程应用 Python 环境告警修复：simulate_python_env_mismatch 改为 false。",
             )
 
-        if fix_id == "fix-cache-1":
-            return self._apply_first_existing_remote_field(
-                fix_id=fix_id,
-                remote_project_dir=remote_project_dir,
-                candidates=[
-                    ("cache_enabled", False),
-                    ("feature_cache_enabled", False),
-                    ("cache.write_enabled", False),
-                    ("simulate_cache_write_failed", False),
-                    ("simulate_disk_full", False),
-                ],
-                success_message="已远程应用缓存写入修复：关闭可选缓存写入或缓存故障模拟。",
-                failure_message=(
-                    "远程缓存写入修复失败：未找到受控缓存开关字段。"
-                    "已检查 cache_enabled、feature_cache_enabled、cache.write_enabled、"
-                    "simulate_cache_write_failed、simulate_disk_full。"
-                ),
-            )
-
-        if fix_id == "fix-optional-dep-1":
-            return self._apply_first_existing_remote_field(
-                fix_id=fix_id,
-                remote_project_dir=remote_project_dir,
-                candidates=[
-                    ("optional_dependency_enabled", False),
-                    ("optional_dependencies.internal_risk_sdk.enabled", False),
-                    ("plugins.internal_risk_sdk.enabled", False),
-                    ("risk_sdk_enabled", False),
-                    ("simulate_python_env_mismatch", False),
-                ],
-                success_message="已远程应用可选依赖降级修复：关闭可选集成或相关告警模拟。",
-                failure_message=(
-                    "远程可选依赖降级修复失败：未找到受控可选依赖开关字段。"
-                    "已检查 optional_dependency_enabled、optional_dependencies.internal_risk_sdk.enabled、"
-                    "plugins.internal_risk_sdk.enabled、risk_sdk_enabled、simulate_python_env_mismatch。"
-                ),
-            )
-
-        if fix_id == "fix-worker-1":
-            return self._apply_first_existing_remote_field(
-                fix_id=fix_id,
-                remote_project_dir=remote_project_dir,
-                candidates=[
-                    ("worker_concurrency", 2),
-                    ("workers", 2),
-                    ("max_workers", 2),
-                    ("consumer_workers", 2),
-                    ("worker.concurrency", 2),
-                    ("server.workers", 2),
-                ],
-                success_message="已远程应用 worker 过载修复：降低受控并发配置。",
-                failure_message=(
-                    "远程 worker 过载修复失败：未找到受控并发字段。"
-                    "已检查 worker_concurrency、workers、max_workers、consumer_workers、"
-                    "worker.concurrency、server.workers。"
-                ),
-            )
-
         return RemoteApplyResult(
             success=False,
             fix_id=fix_id,
@@ -309,6 +204,29 @@ class RemoteSafeApplyExecutor:
             record_path=str(self.record_path),
         )
 
+    @staticmethod
+    def supported_safe_fix_ids() -> set[str]:
+        return set(SAFE_RECOVERY_FIX_IDS)
+
+    def _apply_safe_registry_fix(
+        self,
+        *,
+        spec: SafeRecoverySpec,
+        remote_project_dir: str,
+    ) -> RemoteApplyResult:
+        candidates = [
+            (candidate.field_path, candidate.new_value)
+            for candidate in spec.candidates
+        ]
+        return self._apply_first_existing_remote_field(
+            fix_id=spec.fix_id,
+            remote_project_dir=remote_project_dir,
+            relative_config_path=spec.relative_config_path,
+            candidates=candidates,
+            success_message=spec.remote_success_message,
+            failure_message=spec.remote_failure_message,
+        )
+
     def _apply_first_existing_remote_field(
         self,
         *,
@@ -317,13 +235,14 @@ class RemoteSafeApplyExecutor:
         candidates: list[tuple[str, Any]],
         success_message: str,
         failure_message: str,
+        relative_config_path: str = "config.json",
     ) -> RemoteApplyResult:
         results: list[RemoteConfigEditResult] = []
 
         for field_path, new_value in candidates:
             result = self.editor.update_json_field(
                 remote_project_dir=remote_project_dir,
-                relative_config_path="config.json",
+                relative_config_path=relative_config_path,
                 field_path=field_path,
                 new_value=new_value,
                 fix_id=fix_id,

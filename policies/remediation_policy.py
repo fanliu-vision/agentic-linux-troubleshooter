@@ -5,6 +5,10 @@ from typing import Literal
 
 from detectors import ErrorEvent
 from monitors.project_registry import ProjectConfig
+from safe_recovery.registry import (
+    SAFE_FIX_BY_EVENT_TYPE,
+    safe_fix_id_for_issue_type,
+)
 
 
 RecoveryAction = Literal[
@@ -53,11 +57,7 @@ class RemediationPolicy:
     """
 
     DEFAULT_FIX_MAPPING = {
-        "network_port": "fix-network-1",
-        "gpu_oom": "fix-gpu-1",
-        "cache_write_failed": "fix-cache-1",
-        "optional_dependency_missing": "fix-optional-dep-1",
-        "worker_overload": "fix-worker-1",
+        **SAFE_FIX_BY_EVENT_TYPE,
         "python_env": "fix-python-1",
         "model_path": "fix-model-path-1",
         "config_path": "fix-config-path-1",
@@ -210,20 +210,9 @@ class RemediationPolicy:
         if event_type in self.DEFAULT_FIX_MAPPING:
             return self.DEFAULT_FIX_MAPPING[event_type]
 
-        if issue_type == "network_port":
-            return "fix-network-1"
-
-        if issue_type == "gpu":
-            return "fix-gpu-1"
-
-        if issue_type == "cache":
-            return "fix-cache-1"
-
-        if issue_type == "optional_dependency":
-            return "fix-optional-dep-1"
-
-        if issue_type == "worker_overload":
-            return "fix-worker-1"
+        safe_fix_id = safe_fix_id_for_issue_type(issue_type)
+        if safe_fix_id:
+            return safe_fix_id
 
         if issue_type == "python_env":
             return "fix-python-1"

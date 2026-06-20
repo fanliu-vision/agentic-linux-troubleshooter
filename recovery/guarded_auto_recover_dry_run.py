@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping
 
+from safe_recovery.registry import SAFE_FIX_BY_EVENT_TYPE
+
 
 FORBIDDEN_ACTIONS = [
     "kill -9",
@@ -27,11 +29,8 @@ MANUAL_ESCALATION_EVENT_TYPES = {
 }
 
 GUARDED_DRY_RUN_CANDIDATES = {
-    "network_port": {"fix-network-1"},
-    "gpu_oom": {"fix-gpu-1"},
-    "cache_write_failed": {"fix-cache-1"},
-    "optional_dependency_missing": {"fix-optional-dep-1"},
-    "worker_overload": {"fix-worker-1"},
+    event_type: {fix_id}
+    for event_type, fix_id in SAFE_FIX_BY_EVENT_TYPE.items()
 }
 
 

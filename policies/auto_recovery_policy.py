@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping
 
+from safe_recovery.registry import SAFE_RECOVERY_EVENT_TYPES
+
 
 class StrategyLayer(str, Enum):
     DIAGNOSE_ONLY = "diagnose_only"
@@ -119,13 +121,7 @@ class AutoRecoveryDecision:
     audit_required: bool = True
 
 
-SAFE_CANDIDATE_EVENT_TYPES = {
-    "network_port",
-    "gpu_oom",
-    "cache_write_failed",
-    "optional_dependency_missing",
-    "worker_overload",
-}
+SAFE_CANDIDATE_EVENT_TYPES = set(SAFE_RECOVERY_EVENT_TYPES)
 
 MANUAL_ESCALATION_EVENT_TYPES = {
     "auth_cert",

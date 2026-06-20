@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from fixers.safe_config_editor import ConfigEditResult, SafeConfigEditor
+from safe_recovery.registry import (
+    SAFE_RECOVERY_FIX_IDS,
+    SafeRecoverySpec,
+    get_safe_recovery_spec_by_fix_id,
+)
 
 
 @dataclass
@@ -60,16 +65,9 @@ class SafeApplyExecutor:
                 edit_results=[],
             )
 
-        if fix_id == "fix-gpu-1":
-            results = [
-                self.editor.update_json_field(
-                    relative_config_path="config.json",
-                    field_path="batch_size",
-                    new_value=4,
-                    fix_id=fix_id,
-                )
-            ]
-            return self._finalize(fix_id, results, "已尝试应用 GPU OOM 修复：降低 batch_size。")
+        safe_spec = get_safe_recovery_spec_by_fix_id(fix_id)
+        if safe_spec is not None:
+            return self._apply_safe_registry_fix(safe_spec)
 
         if fix_id == "fix-gpu-2":
             results = [
@@ -87,17 +85,6 @@ class SafeApplyExecutor:
                 ),
             ]
             return self._finalize(fix_id, results, "已尝试应用 GPU 显存优化：bf16 + gradient_checkpointing。")
-
-        if fix_id == "fix-network-1":
-            results = [
-                self.editor.update_json_field(
-                    relative_config_path="config.json",
-                    field_path="metrics_port",
-                    new_value=9101,
-                    fix_id=fix_id,
-                )
-            ]
-            return self._finalize(fix_id, results, "已尝试应用端口冲突修复：metrics_port 改为 9101。")
 
         if fix_id == "fix-disk-1":
             # 企业 demo 中用 simulate_disk_full 表示缓存写入失败模拟开关
@@ -122,58 +109,6 @@ class SafeApplyExecutor:
                 )
             ]
             return self._finalize(fix_id, results, "已尝试应用 Python 环境告警修复：关闭 simulate_python_env_mismatch。")
-
-        if fix_id == "fix-cache-1":
-            results = self._update_first_existing_json_field(
-                fix_id=fix_id,
-                candidates=[
-                    ("cache_enabled", False),
-                    ("feature_cache_enabled", False),
-                    ("cache.write_enabled", False),
-                    ("simulate_cache_write_failed", False),
-                    ("simulate_disk_full", False),
-                ],
-            )
-            return self._finalize(
-                fix_id,
-                results,
-                "已尝试应用缓存写入修复：关闭可选缓存写入或缓存故障模拟。",
-            )
-
-        if fix_id == "fix-optional-dep-1":
-            results = self._update_first_existing_json_field(
-                fix_id=fix_id,
-                candidates=[
-                    ("optional_dependency_enabled", False),
-                    ("optional_dependencies.internal_risk_sdk.enabled", False),
-                    ("plugins.internal_risk_sdk.enabled", False),
-                    ("risk_sdk_enabled", False),
-                    ("simulate_python_env_mismatch", False),
-                ],
-            )
-            return self._finalize(
-                fix_id,
-                results,
-                "已尝试应用可选依赖降级修复：关闭可选集成或相关告警模拟。",
-            )
-
-        if fix_id == "fix-worker-1":
-            results = self._update_first_existing_json_field(
-                fix_id=fix_id,
-                candidates=[
-                    ("worker_concurrency", 2),
-                    ("workers", 2),
-                    ("max_workers", 2),
-                    ("consumer_workers", 2),
-                    ("worker.concurrency", 2),
-                    ("server.workers", 2),
-                ],
-            )
-            return self._finalize(
-                fix_id,
-                results,
-                "已尝试应用 worker 过载修复：降低受控并发配置。",
-            )
 
         return ApplyResult(
             success=False,
@@ -225,17 +160,38 @@ class SafeApplyExecutor:
             applied_record_path=str(self.applied_record_path),
         )
 
+    @staticmethod
+    def supported_safe_fix_ids() -> set[str]:
+        return set(SAFE_RECOVERY_FIX_IDS)
+
+    def _apply_safe_registry_fix(self, spec: SafeRecoverySpec) -> ApplyResult:
+        candidates = [
+            (candidate.field_path, candidate.new_value)
+            for candidate in spec.candidates
+        ]
+        results = self._update_first_existing_json_field(
+            fix_id=spec.fix_id,
+            relative_config_path=spec.relative_config_path,
+            candidates=candidates,
+        )
+        return self._finalize(
+            spec.fix_id,
+            results,
+            spec.local_success_message,
+        )
+
     def _update_first_existing_json_field(
         self,
         *,
         fix_id: str,
         candidates: list[tuple[str, Any]],
+        relative_config_path: str = "config.json",
     ) -> list[ConfigEditResult]:
         results: list[ConfigEditResult] = []
 
         for field_path, new_value in candidates:
             result = self.editor.update_json_field(
-                relative_config_path="config.json",
+                relative_config_path=relative_config_path,
                 field_path=field_path,
                 new_value=new_value,
                 fix_id=fix_id,

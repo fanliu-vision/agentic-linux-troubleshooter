@@ -21,6 +21,7 @@ class ConsoleNotifier:
         print(f"apply_success: {message.apply_success}")
         print(f"rerun_success: {message.rerun_success}")
         print(f"rollback_executed: {message.rollback_executed}")
+        print(f"rollback_success: {message.rollback_success}")
         print(f"recovered: {message.recovered}")
         print(f"message: {message.message}")
         print("reports:")

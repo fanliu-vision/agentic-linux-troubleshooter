@@ -16,6 +16,11 @@ R15 的目标是自动恢复策略安全分层，不是扩权阶段。
 | R15-4 | policy schema validator dry-run | PASS | 否 |
 | R15-5 | guarded auto_recover dry-run | PASS | 否 |
 | R15-6 | audit 与 report/alert 集成设计 + 阶段总结 | PASS | 否 |
+| R15-7 | existing safe_auto_recover controlled validation | PASS | 否 |
+| R15-8 | existing safe_auto_recover live validation plan | PASS | 否 |
+| R15-9 | live preflight / live dry-run | PASS | 否 |
+| R15-10 | 新增 safe 域隔离 live recovery 验证 | PASS | 仅限显式 safe allowlist |
+| R15 final hardening | gate / audit / precheck / cooldown / rollback 收敛 | PASS | 否 |
 
 ## 已完成能力
 
@@ -31,21 +36,24 @@ R15 已完成以下能力：
 - `would_execute=false` 安全边界；
 - guarded dry-run audit record；
 - audit 与 report/alert 集成设计；
+- R15 gate 真实执行入口；
+- report / alert / cycle summary 强制 audit 字段；
+- 真实 precheck；
+- per fingerprint / event_type / project cooldown；
+- rollback 成功与失败路径审计；
+- failure-path controlled validation；
 - R15 阶段测试与验收材料。
 
 ## 未改变边界
 
 R15 保持以下边界：
 
-- 未新增恢复动作；
-- 未扩大 `auto_recover` 权限；
-- 未接入真实执行；
+- 未新增危险恢复动作；
+- 未扩大到未授权故障域；
+- 真实执行仅限显式 `safe_auto_recover` allowlist；
 - 未修改 detector；
-- 未修改 MonitorLoop；
-- 未修改 AutoRecoveryRunner；
-- 未修改真实 configs；
-- 未写真实 `state/` 或 `outputs/`；
-- 当前恢复范围不变；
+- 未允许 legacy passthrough 绕过 R15 gate；
+- 默认配置保持 `auto_recovery_dry_run: true`；
 - `process_crash` 不自动恢复；
 - `container_k8s` 不自动执行 `kubectl`；
 - `disk_full` 不自动执行 `rm`；
@@ -93,4 +101,6 @@ R15-7 已按该范围完成受控验证：`network_port / fix-network-1` 与 `gp
 
 ## 最终结论
 
-R15 自动恢复策略安全分层阶段完成。系统已具备策略校验、策略解析、dry-run 与 guarded dry-run 能力，但真实 auto_recover 权限未扩大。
+R15 自动恢复策略安全分层阶段完成。系统已具备策略校验、策略解析、dry-run、guarded dry-run、R15 runtime gate、强制 audit/report/alert、真实 precheck、执行层 cooldown、rollback 成功/失败审计和 failure-path controlled validation。
+
+真实自动恢复能力已被限制在显式 `safe_auto_recover` allowlist 内；默认运行配置保持 `auto_recovery_dry_run: true`。后续新增恢复域应进入 R16，并按 schema、precheck、dry-run、failure-path、isolated live validation 的顺序逐级验证。

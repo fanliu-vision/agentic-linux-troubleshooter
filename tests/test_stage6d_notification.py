@@ -34,6 +34,48 @@ class FakeRecoveryResult:
     def recovered(self) -> bool:
         return self.apply_success and self.rerun_success
 
+    def recovery_audit_record(self) -> dict:
+        return {
+            "event_type": "network_port",
+            "fingerprint": "fake-network-port",
+            "strategy_layer": "safe_auto_recover",
+            "selected_policy": "r15.runtime",
+            "action": "auto_recover",
+            "candidate_fix_id": "fix-network-1",
+            "selected_fix_id": "fix-network-1",
+            "fix_id": "fix-network-1",
+            "auto_recover_allowed": True,
+            "dry_run": False,
+            "would_execute": True,
+            "allowed_to_execute": True,
+            "precheck_result": {"passed": True, "reasons": []},
+            "cooldown_result": {"allowed": True, "reason": "test"},
+            "rate_limit_result": {"checked_before_runner": True},
+            "rollback_available": True,
+            "operator_required": False,
+            "audit_required": True,
+            "downgrade_reason": "",
+            "forbidden_action": False,
+            "execution_result": "executed_recovered",
+            "rollback_result": "not_needed_recovered",
+            "apply_success": True,
+            "rerun_success": True,
+            "rollback_executed": False,
+            "recovered": True,
+        }
+
+    def recovery_audit_summary(self) -> dict:
+        audit = self.recovery_audit_record()
+        return {
+            "strategy_layer": audit["strategy_layer"],
+            "action": audit["action"],
+            "fix_id": audit["fix_id"],
+            "dry_run": audit["dry_run"],
+            "would_execute": audit["would_execute"],
+            "execution_result": audit["execution_result"],
+            "recovered": audit["recovered"],
+        }
+
 
 def make_project(alerts_dir: str) -> ProjectConfig:
     return ProjectConfig(
@@ -89,6 +131,19 @@ def test_stage6d_file_notification() -> None:
         assert "test_project" in latest
         assert "fix-network-1" in latest
         assert "recovered" in latest
+        assert "R15 恢复审计" in latest
+        assert "execution_result: `executed_recovered`" in latest
+
+        payload = json.loads(jsonl_path.read_text(encoding="utf-8").splitlines()[0])
+        assert payload["strategy_layer"] == "safe_auto_recover"
+        assert payload["auto_recover_allowed"] is True
+        assert payload["dry_run"] is False
+        assert payload["would_execute"] is True
+        assert payload["allowed_to_execute"] is True
+        assert payload["audit_required"] is True
+        assert payload["execution_result"] == "executed_recovered"
+        assert payload["rollback_result"] == "not_needed_recovered"
+        assert payload["recovery_audit_record"]["precheck_result"]["passed"] is True
 
 
 def test_notification_manager_rate_limits_duplicate_fingerprint() -> None:

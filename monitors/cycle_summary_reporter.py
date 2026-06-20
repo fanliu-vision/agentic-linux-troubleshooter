@@ -30,6 +30,7 @@ class CycleEventRecord:
     apply_success: bool = False
     rerun_success: bool = False
     rollback_executed: bool = False
+    rollback_success: bool = False
     recovered: bool = False
 
     notification_status: str = ""
@@ -37,14 +38,17 @@ class CycleEventRecord:
     notification_results: list[str] = field(default_factory=list)
 
     report_paths: list[str] = field(default_factory=list)
+    recovery_audit_summary: dict[str, Any] = field(default_factory=dict)
 
     @property
     def status(self) -> str:
         if self.recovered:
             return "recovered"
 
-        if self.rollback_executed:
+        if self.rollback_executed and self.rollback_success:
             return "rollback_done"
+        if self.rollback_executed:
+            return "rollback_failed"
 
         if self.action == "manual_escalation":
             return "manual_escalation"
@@ -72,6 +76,7 @@ class CycleEventRecord:
             "apply_success": self.apply_success,
             "rerun_success": self.rerun_success,
             "rollback_executed": self.rollback_executed,
+            "rollback_success": self.rollback_success,
             "recovered": self.recovered,
             "status": self.status,
             "event_recovery_status": self.event_recovery_status,
@@ -79,6 +84,7 @@ class CycleEventRecord:
             "notification_channels": self.notification_channels,
             "notification_results": self.notification_results,
             "report_paths": self.report_paths,
+            "recovery_audit_summary": self.recovery_audit_summary,
         }
 
 
@@ -101,6 +107,9 @@ class CycleSummaryReporter:
 
         if all(record.recovered for record in records):
             return "recovered"
+
+        if any(record.rollback_executed and not record.rollback_success for record in records):
+            return "rollback_failed"
 
         if any(record.recovered for record in records):
             return "partially_recovered"
@@ -141,6 +150,10 @@ class CycleSummaryReporter:
 
         recovered_count = sum(1 for record in records if record.recovered)
         rollback_count = sum(1 for record in records if record.rollback_executed)
+        rollback_failed_count = sum(
+            1 for record in records
+            if record.rollback_executed and not record.rollback_success
+        )
         escalation_count = sum(
             1 for record in records
             if record.action == "manual_escalation"
@@ -172,6 +185,7 @@ class CycleSummaryReporter:
         lines.append(f"- events_total: `{len(records)}`")
         lines.append(f"- recovered_count: `{recovered_count}`")
         lines.append(f"- rollback_count: `{rollback_count}`")
+        lines.append(f"- rollback_failed_count: `{rollback_failed_count}`")
         lines.append(f"- manual_escalation_count: `{escalation_count}`")
         lines.append(f"- unresolved_count: `{unresolved_count}`")
         lines.append("")
@@ -185,6 +199,10 @@ class CycleSummaryReporter:
         elif overall_status == "rollback_done":
             lines.append(
                 "本轮自动恢复未完成，至少一个事件已执行 rollback，需要负责人继续处理。"
+            )
+        elif overall_status == "rollback_failed":
+            lines.append(
+                "本轮自动恢复未完成，且至少一个事件 rollback 失败，需要负责人立即处理。"
             )
         elif overall_status == "manual_escalation":
             lines.append(
@@ -203,10 +221,10 @@ class CycleSummaryReporter:
         lines.append("## 2. 事件级处理结果")
         lines.append("")
         lines.append(
-            "| # | event_type | issue_type | severity | action | fix_id | apply_success | rerun_success | rollback_executed | recovered | status | event_recovery_status |"
+            "| # | event_type | issue_type | severity | action | fix_id | apply_success | rerun_success | rollback_executed | rollback_success | recovered | status | event_recovery_status |"
         )
         lines.append(
-            "|---|------------|------------|----------|--------|--------|---------------|---------------|-------------------|-----------|--------|-----------------------|"
+            "|---|------------|------------|----------|--------|--------|---------------|---------------|-------------------|------------------|-----------|--------|-----------------------|"
         )
 
         for index, record in enumerate(records, start=1):
@@ -221,6 +239,7 @@ class CycleSummaryReporter:
                 f"`{record.apply_success}` | "
                 f"`{record.rerun_success}` | "
                 f"`{record.rollback_executed}` | "
+                f"`{record.rollback_success}` | "
                 f"`{record.recovered}` | "
                 f"`{record.status}` | "
                 f"`{record.event_recovery_status}` |"
@@ -249,6 +268,10 @@ class CycleSummaryReporter:
                 lines.append(
                     "结论：该事件自动修复 apply 成功，但 rerun 验证失败，系统已执行 rollback，最终未恢复。"
                 )
+            elif record.status == "rollback_failed":
+                lines.append(
+                    "结论：该事件自动修复 apply 成功，但 rerun 验证失败，且 rollback 未成功，需要负责人立即处理。"
+                )
             elif record.status == "manual_escalation":
                 lines.append(
                     "结论：该事件不在自动修复范围内，已升级通知负责人。"
@@ -272,6 +295,12 @@ class CycleSummaryReporter:
             lines.append(f"### 事件 {index}: `{record.event_type}`")
             lines.append(f"- notification_status: `{record.notification_status or '<unknown>'}`")
             lines.append(f"- notification_channels: `{channels}`")
+            if record.recovery_audit_summary:
+                lines.append("- recovery_audit_summary:")
+                for key, value in record.recovery_audit_summary.items():
+                    lines.append(f"  - {key}: `{value}`")
+            else:
+                lines.append("- recovery_audit_summary: <empty>")
 
             if record.notification_results:
                 lines.append("- notification_results:")
@@ -300,6 +329,7 @@ class CycleSummaryReporter:
         lines.append("")
         lines.append("- 如果任一事件 `recovered=False`，本轮总体状态不得写成 `recovered`。")
         lines.append("- 如果任一事件 `rollback_executed=True`，必须明确说明该事件未恢复并已回滚。")
+        lines.append("- 如果任一事件 `rollback_executed=True` 且 `rollback_success=False`，总体状态必须是 `rollback_failed`。")
         lines.append("- 如果同时存在 `recovered=True` 和 `recovered=False` 的已处理事件，总体状态必须是 `partially_recovered`。")
         lines.append("- LLM 事件报告只能作为解释性报告，本汇总报告中的 `overall_status` 是确定性结果。")
         lines.append("- `overall_status` 表示已处理事件的自动恢复状态，不等同于系统中不存在任何残留风险。")

@@ -613,11 +613,13 @@ class MonitorLoop:
             apply_success=recovery_result.apply_success,
             rerun_success=recovery_result.rerun_success,
             rollback_executed=recovery_result.rollback_executed,
+            rollback_success=recovery_result.rollback_success,
             recovered=recovery_result.recovered,
             notification_status=notification_status,
             notification_channels=list(self.project.notification.channels),
             notification_results=list(notify_results),
             report_paths=list(recovery_result.report_paths),
+            recovery_audit_summary=recovery_result.recovery_audit_summary(),
         )
 
         return record

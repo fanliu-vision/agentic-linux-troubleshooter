@@ -18,6 +18,7 @@ from policies.auto_recovery_policy import (
     StrategyLayer,
     resolve_policy_for_event,
 )
+from recovery.auto_recovery_runtime_controls import build_runtime_precheck_result
 from recovery.guarded_auto_recover_dry_run import FORBIDDEN_ACTIONS
 
 
@@ -128,12 +129,18 @@ def evaluate_runtime_auto_recovery_gate(
     event: ErrorEvent,
     project: ProjectConfig,
     remediation_decision: RemediationDecision,
+    cooldown_result: dict[str, Any] | None = None,
 ) -> RuntimeAutoRecoveryGateResult:
     if not getattr(project.policy, "auto_recovery_policy_enabled", True):
-        return _legacy_passthrough_result(
+        return _blocked_result(
             event=event,
-            project=project,
-            remediation_decision=remediation_decision,
+            candidate_fix_id=remediation_decision.fix_id or "",
+            strategy_layer=StrategyLayer.DISABLED,
+            downgrade_reason="r15_policy_disabled",
+            precheck_result={"passed": False, "reason": "r15_policy_disabled"},
+            cooldown_result=cooldown_result or _default_cooldown_result(),
+            rollback_available=False,
+            policy_decision=None,
         )
 
     candidate_fix_id = remediation_decision.fix_id or ""
@@ -154,7 +161,7 @@ def evaluate_runtime_auto_recovery_gate(
             strategy_layer=StrategyLayer.DISABLED,
             downgrade_reason=f"r15_policy_validation_failed:{exc}",
             precheck_result={"passed": False, "reason": "r15_policy_validation_failed"},
-            cooldown_result=_default_cooldown_result(),
+            cooldown_result=cooldown_result or _default_cooldown_result(),
             rollback_available=False,
             policy_decision=None,
         )
@@ -165,10 +172,11 @@ def evaluate_runtime_auto_recovery_gate(
         remediation_decision=remediation_decision,
         policy_decision=policy_decision,
     )
-    cooldown_result = _default_cooldown_result()
+    cooldown_result = cooldown_result or _default_cooldown_result()
     rollback_available = bool(
         project.policy.rollback_on_failure
         and policy_decision.selected_fix_id in set(SAFE_FIX_BY_EVENT_TYPE.values())
+        and precheck_result.get("rollback_plan", {}).get("available") is True
     )
 
     downgrade_reason = (
@@ -221,6 +229,13 @@ def evaluate_runtime_auto_recovery_gate(
     return result
 
 
+def refresh_runtime_auto_recovery_audit(
+    result: RuntimeAutoRecoveryGateResult,
+) -> RuntimeAutoRecoveryGateResult:
+    result.audit_record = _build_audit_record(result)
+    return result
+
+
 def _safe_policy(fix_id: str, *, dry_run: bool) -> EventTypePolicy:
     return EventTypePolicy(
         strategy_layer=StrategyLayer.SAFE_AUTO_RECOVER,
@@ -254,9 +269,14 @@ def _run_precheck(
     remediation_decision: RemediationDecision,
     policy_decision: AutoRecoveryDecision,
 ) -> dict[str, Any]:
-    reasons: list[str] = []
     expected_fix_id = SAFE_FIX_BY_EVENT_TYPE.get(event.event_type, "")
     selected_fix_id = policy_decision.selected_fix_id
+    precheck = build_runtime_precheck_result(
+        project=project,
+        event_type=event.event_type,
+        selected_fix_id=selected_fix_id,
+    )
+    reasons: list[str] = list(precheck.get("reasons") or [])
 
     if not project.policy.auto_recover:
         reasons.append("project_auto_recover_disabled")
@@ -294,19 +314,27 @@ def _run_precheck(
     if not project.policy.rollback_on_failure:
         reasons.append("rollback_disabled")
 
-    return {
-        "passed": not reasons,
-        "reasons": reasons,
-        "target_event_type": event.event_type,
-        "target_fix_id": selected_fix_id,
-        "project_id": project.project_id,
-    }
+    precheck.update(
+        {
+            "passed": not reasons,
+            "reasons": reasons,
+            "target_event_type": event.event_type,
+            "target_fix_id": selected_fix_id,
+            "project_id": project.project_id,
+            "evidence_present": bool(
+                event.raw_excerpt or event.summary or event.matched_keywords
+            ),
+        }
+    )
+    return precheck
 
 
 def _default_cooldown_result() -> dict[str, Any]:
     return {
         "allowed": True,
+        "reserved": False,
         "reason": "monitor_loop_seen_fingerprint_and_rate_limit_checked_before_recovery",
+        "scopes": {},
     }
 
 
@@ -351,6 +379,7 @@ def _build_audit_record(result: RuntimeAutoRecoveryGateResult) -> dict[str, Any]
         "dry_run": result.dry_run,
         "auto_recover_allowed": result.auto_recover_allowed,
         "allowed_to_execute": result.allowed_to_execute,
+        "audit_required": result.audit_required,
         "precheck_result": dict(result.precheck_result),
         "cooldown_result": dict(result.cooldown_result),
         "rate_limit_result": {
@@ -360,41 +389,12 @@ def _build_audit_record(result: RuntimeAutoRecoveryGateResult) -> dict[str, Any]
         "rollback_available": result.rollback_available,
         "operator_required": result.operator_required,
         "downgrade_reason": result.downgrade_reason,
+        "forbidden_action": _has_forbidden_action(result),
         "execution_result": execution_result,
         "rollback_result": "not_run_before_execution",
         "policy_decision": _policy_decision_summary(result.policy_decision),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-
-
-def _legacy_passthrough_result(
-    *,
-    event: ErrorEvent,
-    project: ProjectConfig,
-    remediation_decision: RemediationDecision,
-) -> RuntimeAutoRecoveryGateResult:
-    allowed = bool(remediation_decision.is_auto_recover)
-    selected_fix_id = remediation_decision.fix_id if allowed else ""
-    result = RuntimeAutoRecoveryGateResult(
-        event_type=event.event_type,
-        fingerprint=event.fingerprint,
-        strategy_layer="legacy_remediation_policy",
-        candidate_fix_id=remediation_decision.fix_id,
-        selected_fix_id=selected_fix_id,
-        dry_run=False,
-        would_execute=allowed,
-        allowed_to_execute=allowed,
-        auto_recover_allowed=allowed,
-        operator_required=False,
-        audit_required=False,
-        downgrade_reason="" if allowed else remediation_decision.reason,
-        precheck_result={"passed": allowed, "legacy_policy_enabled": True},
-        cooldown_result=_default_cooldown_result(),
-        rollback_available=bool(project.policy.rollback_on_failure),
-        policy_decision=None,
-    )
-    result.audit_record = _build_audit_record(result)
-    return result
 
 
 def _blocked_result(
@@ -458,6 +458,11 @@ def _matches_forbidden_text(values: list[str]) -> bool:
         if any(item and item in normalized for item in normalized_forbidden):
             return True
     return False
+
+
+def _has_forbidden_action(result: RuntimeAutoRecoveryGateResult) -> bool:
+    reasons = result.precheck_result.get("reasons") or []
+    return result.downgrade_reason == "forbidden_action" or "forbidden_action" in reasons
 
 
 def _normalize_text(value: str) -> str:

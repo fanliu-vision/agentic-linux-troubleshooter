@@ -37,6 +37,7 @@ def test_cycle_summary_partially_recovered() -> None:
                 apply_success=True,
                 rerun_success=False,
                 rollback_executed=True,
+                rollback_success=True,
                 recovered=False,
                 notification_status="rollback_done",
                 notification_channels=["console", "file"],
@@ -60,6 +61,12 @@ def test_cycle_summary_partially_recovered() -> None:
                 notification_channels=["console", "file"],
                 notification_results=["[Notifier][Console] sent"],
                 report_paths=[str(report_root / "network_report.md")],
+                recovery_audit_summary={
+                    "strategy_layer": "safe_auto_recover",
+                    "dry_run": False,
+                    "would_execute": True,
+                    "execution_result": "executed_recovered",
+                },
             ),
         ]
 
@@ -73,6 +80,8 @@ def test_cycle_summary_partially_recovered() -> None:
         assert "`network_port`" in text
         assert "`rollback_done`" in text
         assert "`recovered`" in text
+        assert "recovery_audit_summary" in text
+        assert "execution_result: `executed_recovered`" in text
         assert "如果任一事件 `recovered=False`" in text
 
 

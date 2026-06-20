@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,22 @@ def make_project(
     allow_auto_apply: list[str] | None = None,
     project_dir: str = ".",
 ) -> ProjectConfig:
+    if project_dir == ".":
+        temp_project_dir = Path(tempfile.mkdtemp(prefix="r15-safe-expansion-"))
+        (temp_project_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "metrics_port": 9000,
+                    "batch_size": 16,
+                    "simulate_disk_full": True,
+                    "simulate_python_env_mismatch": True,
+                    "worker_concurrency": 8,
+                }
+            ),
+            encoding="utf-8",
+        )
+        project_dir = str(temp_project_dir)
+
     return ProjectConfig(
         project_id="safe_expansion",
         name="Safe Expansion",

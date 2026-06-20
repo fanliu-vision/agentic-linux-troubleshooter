@@ -124,6 +124,9 @@ class TroubleshootingSession:
         self.latest_apply_fix_id = ""
         self.latest_apply_summary = ""
         self.latest_diff_path = ""
+        self.latest_apply_edit_records: list[dict[str, Any]] = []
+        self.latest_rollback_success = False
+        self.latest_rollback_edit_records: list[dict[str, Any]] = []
         self.project_context: ProjectContext | None = None
         self.latest_context_path = ""
         self.remote_profile: RemoteSSHProfile | None = None
@@ -143,12 +146,18 @@ class TroubleshootingSession:
         self.latest_remote_apply_summary = ""
         self.latest_remote_diff_path = ""
         self.latest_remote_apply_project_dir = ""
+        self.latest_remote_apply_edit_records: list[dict[str, Any]] = []
+        self.latest_remote_rollback_success = False
+        self.latest_remote_rollback_edit_records: list[dict[str, Any]] = []
         self.latest_auto_recovery_result_text = ""
         self.latest_auto_recovery_action = ""
         self.latest_auto_recovery_fix_id = ""
         self.latest_auto_recovery_apply_success = False
         self.latest_auto_recovery_rerun_success = False
         self.latest_auto_recovery_rollback_executed = False
+        self.latest_auto_recovery_rollback_success = False
+        self.latest_auto_recovery_audit_record: dict[str, Any] = {}
+        self.latest_auto_recovery_audit_summary: dict[str, Any] = {}
         self.latest_notification_result_text = ""
         self.latest_notification_status = ""
         self.latest_notification_channels = []
@@ -393,6 +402,7 @@ class TroubleshootingSession:
         self.latest_remote_apply_fix_id = fix_id
         self.latest_remote_apply_summary = result.message
         self.latest_remote_apply_project_dir = remote_project_dir
+        self.latest_remote_apply_edit_records = self._config_edit_records(result.edit_results)
 
         diff_paths = [
             item.diff_path for item in result.edit_results if item.diff_path
@@ -461,6 +471,8 @@ class TroubleshootingSession:
 
         result = executor.rollback_latest()
         evidence_text = result.to_markdown()
+        self.latest_remote_rollback_success = result.success
+        self.latest_remote_rollback_edit_records = self._config_edit_records(result.edit_results)
 
         self.evidence_items.append(
             EvidenceItem(
@@ -725,6 +737,7 @@ class TroubleshootingSession:
         self.latest_apply_success = result.success
         self.latest_apply_fix_id = fix_id
         self.latest_apply_summary = result.message
+        self.latest_apply_edit_records = self._config_edit_records(result.edit_results)
 
         diff_paths = [
             item.diff_path for item in result.edit_results if item.diff_path
@@ -775,6 +788,8 @@ class TroubleshootingSession:
         result = executor.rollback_latest()
 
         evidence_text = result.to_markdown()
+        self.latest_rollback_success = result.success
+        self.latest_rollback_edit_records = self._config_edit_records(result.edit_results)
 
         self.evidence_items.append(
             EvidenceItem(
@@ -793,6 +808,24 @@ class TroubleshootingSession:
                 + "\n\n"
                 + "回滚后可以使用 `/rerun` 验证项目是否回到修改前状态。"
         )
+
+    @staticmethod
+    def _config_edit_records(edit_results: list[Any]) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for item in edit_results:
+            records.append(
+                {
+                    "success": bool(getattr(item, "success", False)),
+                    "message": str(getattr(item, "message", "")),
+                    "config_path": str(getattr(item, "config_path", "")),
+                    "backup_path": str(getattr(item, "backup_path", "")),
+                    "diff_path": str(getattr(item, "diff_path", "")),
+                    "field_path": str(getattr(item, "field_path", "")),
+                    "old_value": getattr(item, "old_value", None),
+                    "new_value": getattr(item, "new_value", None),
+                }
+            )
+        return records
 
     def show_latest_diff(self) -> str:
         """
@@ -1327,6 +1360,9 @@ class TroubleshootingSession:
             apply_success: bool,
             rerun_success: bool,
             rollback_executed: bool,
+            rollback_success: bool = False,
+            recovery_audit_record: dict[str, Any] | None = None,
+            recovery_audit_summary: dict[str, Any] | None = None,
     ) -> None:
         self.latest_auto_recovery_result_text = result_text
         self.latest_auto_recovery_action = action
@@ -1334,6 +1370,9 @@ class TroubleshootingSession:
         self.latest_auto_recovery_apply_success = apply_success
         self.latest_auto_recovery_rerun_success = rerun_success
         self.latest_auto_recovery_rollback_executed = rollback_executed
+        self.latest_auto_recovery_rollback_success = rollback_success
+        self.latest_auto_recovery_audit_record = recovery_audit_record or {}
+        self.latest_auto_recovery_audit_summary = recovery_audit_summary or {}
 
         self.add_evidence(
             content=result_text,
@@ -1371,6 +1410,8 @@ class TroubleshootingSession:
                 f"apply_success={self.latest_auto_recovery_apply_success}",
                 f"rerun_success={self.latest_auto_recovery_rerun_success}",
                 f"rollback_executed={self.latest_auto_recovery_rollback_executed}",
+                f"rollback_success={self.latest_auto_recovery_rollback_success}",
+                f"recovery_audit_summary={self.latest_auto_recovery_audit_summary}",
             ],
             analysis=[
                 self.latest_auto_recovery_result_text,

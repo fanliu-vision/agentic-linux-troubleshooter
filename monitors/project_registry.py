@@ -53,6 +53,9 @@ class PolicyConfig:
     auto_rerun_after_apply: bool = True
     auto_recovery_policy_enabled: bool = True
     auto_recovery_dry_run: bool = True
+    auto_recovery_fingerprint_cooldown_seconds: int = 3600
+    auto_recovery_event_type_cooldown_seconds: int = 1800
+    auto_recovery_project_cooldown_seconds: int = 600
 
 
 @dataclass
@@ -156,6 +159,15 @@ class ProjectRegistry:
                 auto_recovery_dry_run=_as_bool(
                     policy_data.get("auto_recovery_dry_run"),
                     True,
+                ),
+                auto_recovery_fingerprint_cooldown_seconds=int(
+                    policy_data.get("auto_recovery_fingerprint_cooldown_seconds", 3600)
+                ),
+                auto_recovery_event_type_cooldown_seconds=int(
+                    policy_data.get("auto_recovery_event_type_cooldown_seconds", 1800)
+                ),
+                auto_recovery_project_cooldown_seconds=int(
+                    policy_data.get("auto_recovery_project_cooldown_seconds", 600)
                 ),
             ),
             notification=NotificationConfig(

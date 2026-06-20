@@ -51,6 +51,8 @@ class PolicyConfig:
     escalation_required: list[str] = field(default_factory=list)
     rollback_on_failure: bool = True
     auto_rerun_after_apply: bool = True
+    auto_recovery_policy_enabled: bool = True
+    auto_recovery_dry_run: bool = True
 
 
 @dataclass
@@ -147,6 +149,14 @@ class ProjectRegistry:
                 escalation_required=list(policy_data.get("escalation_required") or []),
                 rollback_on_failure=_as_bool(policy_data.get("rollback_on_failure"), True),
                 auto_rerun_after_apply=_as_bool(policy_data.get("auto_rerun_after_apply"), True),
+                auto_recovery_policy_enabled=_as_bool(
+                    policy_data.get("auto_recovery_policy_enabled"),
+                    True,
+                ),
+                auto_recovery_dry_run=_as_bool(
+                    policy_data.get("auto_recovery_dry_run"),
+                    True,
+                ),
             ),
             notification=NotificationConfig(
                 enabled=_as_bool(notification_data.get("enabled"), True),

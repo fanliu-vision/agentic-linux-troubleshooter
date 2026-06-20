@@ -24,6 +24,8 @@ projects:
 
     policy:
       auto_recover: true
+      auto_recovery_policy_enabled: true
+      auto_recovery_dry_run: true
       rollback_on_failure: true
       auto_rerun_after_apply: true
       allow_auto_apply:

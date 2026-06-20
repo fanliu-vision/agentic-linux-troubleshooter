@@ -212,6 +212,38 @@ kubectl apply
 
 ## 9. 后续建议
 
+### R15-9a runtime gate 接入后的操作口径
+
+R15 runtime auto_recovery gate 已接入真实 `AutoRecoveryRunner` 执行路径。真实执行前会先经过 R15 policy resolver、runtime precheck、cooldown/限流结果承接、rollback 可用性检查和 audit 记录。
+
+当前默认运行配置保持：
+
+```yaml
+policy:
+  auto_recover: true
+  auto_recovery_policy_enabled: true
+  auto_recovery_dry_run: true
+```
+
+因此，`network_port / fix-network-1` 与 `gpu_oom / fix-gpu-1` 在真实 daemon 链路中会先生成 R15 gate audit，并以 `dry_run=true` 阻断真实 apply/rerun。此时 report/alert 可以看到 `r15_strategy_layer`、`r15_dry_run`、`r15_would_execute`、`r15_allowed_to_execute` 和 `r15_downgrade_reason`。
+
+如后续单独阶段要进入真实小范围恢复测试，必须显式将测试项目配置改为：
+
+```yaml
+policy:
+  auto_recovery_dry_run: false
+```
+
+并且仍必须满足：
+
+- event_type 只允许 `network_port` 或 `gpu_oom`；
+- fix_id 只允许 `fix-network-1` 或 `fix-gpu-1`；
+- fix_id 必须出现在 `allow_auto_apply`；
+- rollback 必须启用；
+- precheck 必须通过；
+- MonitorLoop seen fingerprint、rate limit 和 per-cycle limit 必须未阻断；
+- 不允许 `process_crash`、`container_k8s`、`disk_full`、`python_env`、`auth_cert` 等高风险故障进入真实自动恢复。
+
 建议下一步：
 
 ```text

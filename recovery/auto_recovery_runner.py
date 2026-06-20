@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from detectors import ErrorEvent
 from monitors.project_registry import ProjectConfig
 from policies import RemediationDecision, RemediationPolicy
+from recovery.auto_recovery_runtime_gate import (
+    RuntimeAutoRecoveryGateResult,
+    evaluate_runtime_auto_recovery_gate,
+)
 from sessions import EvidenceItem, TroubleshootingSession
 
 
@@ -18,6 +22,7 @@ class AutoRecoveryResult:
     rollback_executed: bool = False
     report_paths: list[str] = field(default_factory=list)
     messages: list[str] = field(default_factory=list)
+    r15_gate: RuntimeAutoRecoveryGateResult | None = None
 
     @property
     def recovered(self) -> bool:
@@ -59,22 +64,48 @@ class AutoRecoveryResult:
             f"- rerun_success: `{self.rerun_success}`",
             f"- rollback_executed: `{self.rollback_executed}`",
             f"- recovered: `{self.recovered}`",
-            "",
-            "## 状态口径",
-            f"- event_recovery_status: `{event_recovery_status}`",
-            f"- residual_risk_status: `{residual_risk_status}`",
-            f"- deterministic_event_status: `{deterministic_status}`",
-            "- event_report_scope: `single_event`",
-            "- status_rule: `event_recovery_status 只表示当前事件的自动恢复结果；disk/python_env 等次要风险应写入 residual_risk_status，不能把已恢复事件改写成 partially_recovered。`",
-            "- consistency_rule: `如果 apply_success=True、rerun_success=True、rollback_executed=False、recovered=True，则当前事件必须写成 recovered。`",
-            "",
-            "### 策略原因",
-            "",
-            self.decision.reason,
-            "",
-            "### 执行日志",
-            "",
         ]
+
+        if self.r15_gate is not None:
+            lines.extend(
+                [
+                    f"- r15_strategy_layer: `{self.r15_gate.strategy_layer}`",
+                    f"- r15_dry_run: `{self.r15_gate.dry_run}`",
+                    f"- r15_would_execute: `{self.r15_gate.would_execute}`",
+                    f"- r15_allowed_to_execute: `{self.r15_gate.allowed_to_execute}`",
+                    f"- r15_downgrade_reason: `{self.r15_gate.downgrade_reason or '<none>'}`",
+                ]
+            )
+
+        lines.extend(
+            [
+                "",
+                "## 状态口径",
+                f"- event_recovery_status: `{event_recovery_status}`",
+                f"- residual_risk_status: `{residual_risk_status}`",
+                f"- deterministic_event_status: `{deterministic_status}`",
+                "- event_report_scope: `single_event`",
+                "- status_rule: `event_recovery_status 只表示当前事件的自动恢复结果；disk/python_env 等次要风险应写入 residual_risk_status，不能把已恢复事件改写成 partially_recovered。`",
+                "- consistency_rule: `如果 apply_success=True、rerun_success=True、rollback_executed=False、recovered=True，则当前事件必须写成 recovered。`",
+                "",
+                "### 策略原因",
+                "",
+                self.decision.reason,
+                "",
+            ]
+        )
+
+        if self.r15_gate is not None:
+            lines.extend(
+                [
+                    "### R15 runtime gate audit",
+                    "",
+                    self.r15_gate.to_markdown(),
+                    "",
+                ]
+            )
+
+        lines.extend(["### 执行日志", ""])
 
         if self.messages:
             for item in self.messages:
@@ -114,6 +145,18 @@ class AutoRecoveryRunner:
         self.session = session
         self.policy = policy or RemediationPolicy()
 
+    def is_auto_recover_candidate(self, event: ErrorEvent) -> bool:
+        decision = self.policy.decide(event=event, project=self.project)
+        if not decision.is_auto_recover:
+            return False
+
+        gate = evaluate_runtime_auto_recovery_gate(
+            event=event,
+            project=self.project,
+            remediation_decision=decision,
+        )
+        return gate.is_candidate
+
     def recover(self, event: ErrorEvent) -> AutoRecoveryResult:
         issue_type = getattr(event, "issue_type", getattr(event, "event_type", "unknown"))
         decision = self.policy.decide(event=event, project=self.project)
@@ -139,6 +182,39 @@ class AutoRecoveryRunner:
         if not decision.is_auto_recover:
             result.messages.append(
                 "[Escalation] 当前事件不满足自动修复条件，已进入负责人通知 / 报告流程。"
+            )
+            self._record_result(result)
+            self._generate_report(
+                result,
+                evidence_items=self.session.evidence_items[report_scope_start:],
+            )
+            return result
+
+        gate = evaluate_runtime_auto_recovery_gate(
+            event=event,
+            project=self.project,
+            remediation_decision=decision,
+        )
+        result.r15_gate = gate
+
+        self.session.add_evidence(
+            content=gate.to_markdown(),
+            source="r15_auto_recovery_gate",
+            title=f"R15 auto recovery gate: {event.event_type}",
+            issue_type=issue_type,
+        )
+
+        if not gate.allowed_to_execute:
+            result.decision = self._downgrade_decision_for_r15_gate(
+                decision=decision,
+                gate=gate,
+            )
+            result.messages.append(
+                "[R15Gate] 自动恢复未执行："
+                f"strategy_layer={gate.strategy_layer}, "
+                f"dry_run={gate.dry_run}, "
+                f"would_execute={gate.would_execute}, "
+                f"reason={gate.downgrade_reason or '<none>'}."
             )
             self._record_result(result)
             self._generate_report(
@@ -181,6 +257,32 @@ class AutoRecoveryRunner:
                 evidence_items=self.session.evidence_items[report_scope_start:],
             )
             return result
+
+    def _downgrade_decision_for_r15_gate(
+        self,
+        *,
+        decision: RemediationDecision,
+        gate: RuntimeAutoRecoveryGateResult,
+    ) -> RemediationDecision:
+        action = "manual_escalation" if gate.operator_required else "report_only"
+        if gate.dry_run and gate.auto_recover_allowed:
+            action = "report_only"
+
+        return RemediationDecision(
+            action=action,  # type: ignore[arg-type]
+            fix_id=gate.selected_fix_id or decision.fix_id,
+            reason=(
+                "R15 runtime gate blocked automatic execution. "
+                f"strategy_layer={gate.strategy_layer}; "
+                f"dry_run={gate.dry_run}; "
+                f"would_execute={gate.would_execute}; "
+                f"downgrade_reason={gate.downgrade_reason or '<none>'}."
+            ),
+            severity=decision.severity,
+            notify_owner=decision.notify_owner,
+            should_rerun=decision.should_rerun,
+            rollback_on_failure=decision.rollback_on_failure,
+        )
 
     def _find_event_evidence_start(self, event: ErrorEvent) -> int:
         fingerprint = getattr(event, "fingerprint", "")

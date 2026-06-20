@@ -231,6 +231,18 @@ class MonitorLoop:
         return list(self.detector.detect(text=text, source=source) or [])
 
     def _is_auto_recover_candidate(self, event: ErrorEvent) -> bool:
+        runner_candidate = getattr(self.recovery_runner, "is_auto_recover_candidate", None)
+        if callable(runner_candidate):
+            try:
+                return bool(runner_candidate(event))
+            except Exception as exc:
+                self.daemon_logger.warning(
+                    f"failed to pre-check R15 auto recovery candidate: "
+                    f"fingerprint={event.fingerprint}, event_type={event.event_type}, "
+                    f"error={type(exc).__name__}: {exc}"
+                )
+                return False
+
         policy = getattr(self.recovery_runner, "policy", None)
         if policy is None or not hasattr(policy, "decide"):
             return False

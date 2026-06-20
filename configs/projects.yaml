@@ -31,6 +31,9 @@ projects:
       allow_auto_apply:
         - fix-network-1
         - fix-gpu-1
+        - fix-cache-1
+        - fix-optional-dep-1
+        - fix-worker-1
       escalation_required:
         - disk
         - slurm

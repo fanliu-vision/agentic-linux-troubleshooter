@@ -200,6 +200,64 @@ class RemoteSafeApplyExecutor:
                 "已远程应用 Python 环境告警修复：simulate_python_env_mismatch 改为 false。",
             )
 
+        if fix_id == "fix-cache-1":
+            return self._apply_first_existing_remote_field(
+                fix_id=fix_id,
+                remote_project_dir=remote_project_dir,
+                candidates=[
+                    ("cache_enabled", False),
+                    ("feature_cache_enabled", False),
+                    ("cache.write_enabled", False),
+                    ("simulate_cache_write_failed", False),
+                    ("simulate_disk_full", False),
+                ],
+                success_message="已远程应用缓存写入修复：关闭可选缓存写入或缓存故障模拟。",
+                failure_message=(
+                    "远程缓存写入修复失败：未找到受控缓存开关字段。"
+                    "已检查 cache_enabled、feature_cache_enabled、cache.write_enabled、"
+                    "simulate_cache_write_failed、simulate_disk_full。"
+                ),
+            )
+
+        if fix_id == "fix-optional-dep-1":
+            return self._apply_first_existing_remote_field(
+                fix_id=fix_id,
+                remote_project_dir=remote_project_dir,
+                candidates=[
+                    ("optional_dependency_enabled", False),
+                    ("optional_dependencies.internal_risk_sdk.enabled", False),
+                    ("plugins.internal_risk_sdk.enabled", False),
+                    ("risk_sdk_enabled", False),
+                    ("simulate_python_env_mismatch", False),
+                ],
+                success_message="已远程应用可选依赖降级修复：关闭可选集成或相关告警模拟。",
+                failure_message=(
+                    "远程可选依赖降级修复失败：未找到受控可选依赖开关字段。"
+                    "已检查 optional_dependency_enabled、optional_dependencies.internal_risk_sdk.enabled、"
+                    "plugins.internal_risk_sdk.enabled、risk_sdk_enabled、simulate_python_env_mismatch。"
+                ),
+            )
+
+        if fix_id == "fix-worker-1":
+            return self._apply_first_existing_remote_field(
+                fix_id=fix_id,
+                remote_project_dir=remote_project_dir,
+                candidates=[
+                    ("worker_concurrency", 2),
+                    ("workers", 2),
+                    ("max_workers", 2),
+                    ("consumer_workers", 2),
+                    ("worker.concurrency", 2),
+                    ("server.workers", 2),
+                ],
+                success_message="已远程应用 worker 过载修复：降低受控并发配置。",
+                failure_message=(
+                    "远程 worker 过载修复失败：未找到受控并发字段。"
+                    "已检查 worker_concurrency、workers、max_workers、consumer_workers、"
+                    "worker.concurrency、server.workers。"
+                ),
+            )
+
         return RemoteApplyResult(
             success=False,
             fix_id=fix_id,
@@ -248,6 +306,43 @@ class RemoteSafeApplyExecutor:
             fix_id=f"remote-rollback:{latest.get('fix_id', '<unknown>')}",
             message="已回滚最近一次远程 apply。" if success else "远程 rollback 失败。",
             edit_results=edit_results,
+            record_path=str(self.record_path),
+        )
+
+    def _apply_first_existing_remote_field(
+        self,
+        *,
+        fix_id: str,
+        remote_project_dir: str,
+        candidates: list[tuple[str, Any]],
+        success_message: str,
+        failure_message: str,
+    ) -> RemoteApplyResult:
+        results: list[RemoteConfigEditResult] = []
+
+        for field_path, new_value in candidates:
+            result = self.editor.update_json_field(
+                remote_project_dir=remote_project_dir,
+                relative_config_path="config.json",
+                field_path=field_path,
+                new_value=new_value,
+                fix_id=fix_id,
+            )
+            results.append(result)
+
+            if result.success:
+                return self._finalize(
+                    fix_id,
+                    remote_project_dir,
+                    [result],
+                    f"{success_message} 字段 `{field_path}` 已更新。",
+                )
+
+        return RemoteApplyResult(
+            success=False,
+            fix_id=fix_id,
+            message=failure_message,
+            edit_results=results,
             record_path=str(self.record_path),
         )
 

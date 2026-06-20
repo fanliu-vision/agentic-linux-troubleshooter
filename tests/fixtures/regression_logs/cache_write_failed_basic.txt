@@ -1,0 +1,4 @@
+[cache] preparing order feature cache at /tmp/acme_order_cache
+[cache] WARNING: failed to write cache file /tmp/acme_order_cache/features_0001.bin
+OSError: [Errno 28] No space left on device: '/tmp/acme_order_cache/features_0001.bin'
+[cache] fallback: continue with in-memory feature cache

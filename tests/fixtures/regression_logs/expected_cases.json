@@ -14,8 +14,29 @@
     "expected_action": "auto_recover_or_policy_checked"
   },
   {
+    "case_id": "cache_write_failed_basic",
+    "log_file": "cache_write_failed_basic.txt",
+    "expected_event_type": "cache_write_failed",
+    "expected_issue_type": "cache",
+    "expected_action": "policy_auto_recover"
+  },
+  {
+    "case_id": "optional_dependency_missing_basic",
+    "log_file": "optional_dependency_missing_basic.txt",
+    "expected_event_type": "optional_dependency_missing",
+    "expected_issue_type": "optional_dependency",
+    "expected_action": "policy_auto_recover"
+  },
+  {
+    "case_id": "worker_overload_basic",
+    "log_file": "worker_overload_basic.txt",
+    "expected_event_type": "worker_overload",
+    "expected_issue_type": "worker_overload",
+    "expected_action": "policy_auto_recover"
+  },
+  {
     "case_id": "disk_full_basic",
-    "log_file": "disk_full_basic.log",
+    "log_file": "disk_full_basic_non_cache.txt",
     "expected_event_type": "disk_full",
     "expected_issue_type": "disk",
     "expected_action": "policy_escalation_only"

@@ -20,6 +20,9 @@ policy 是 detection 与 action 之间的安全边界。detection 只生成 even
 |---|---|---|---|---|---|---|---|
 | `network_port` | `Address already in use`、`Errno 98`、bind failed、port already in use | `network_port_basic.log` | 项目允许时 `auto_recover` | `fix-network-1` | 是，仅限显式允许 | 默认否 | 仅做受控端口或配置调整；不代表通用网络连通性问题。 |
 | `gpu_oom` | CUDA/HIP out of memory、`OutOfMemoryError`、accelerator memory constraints | `gpu_oom_basic.log` | 项目允许时 `auto_recover` | `fix-gpu-1` | 是，仅限显式允许 | 默认否 | 仅做受控 GPU 相关缓解；不覆盖主机 OOM 或 Kubernetes `OOMKilled`。 |
+| `cache_write_failed` | cache write failed、failed to write cache、cache `Errno 28`、in-memory feature cache fallback | `cache_write_failed_basic.log` | 项目允许时 `auto_recover` | `fix-cache-1` | 是，仅限显式允许 | 默认否 | 只关闭可选缓存写入或缓存故障模拟；不执行 `rm`、不清理目录，不代表通用 `disk_full`。 |
+| `optional_dependency_missing` | optional dependency missing、internal risk SDK unavailable、fallback local rule engine | `optional_dependency_missing_basic.log` | 项目允许时 `auto_recover` | `fix-optional-dep-1` | 是，仅限显式允许 | 默认否 | 只关闭可选依赖集成；不安装 package，不代表核心 `python_env` 故障。 |
+| `worker_overload` | worker overload、worker pool exhausted、concurrency too high、queue backpressure | `worker_overload_basic.log` | 项目允许时 `auto_recover` | `fix-worker-1` | 是，仅限显式允许 | 默认否 | 只降低配置化 worker 并发；不 kill 进程、不 restart 服务，不代表主机级 `host_resource`。 |
 | `disk_full` | `No space left on device`、`Errno 28`、disk quota exceeded、inode exhausted | `disk_full_basic.log` | `manual_escalation` | `<none>` | 否 | 是 | 不自动执行 `rm` 或破坏性清理。 |
 | `python_env` | `ModuleNotFoundError`、`ImportError`、missing module、pip/interpreter mismatch | `python_env_basic.log` | 默认 `manual_escalation`，显式允许时才可考虑受控 fix | `fix-python-1` 候选 | 仅限项目显式允许 | 默认是 | 不执行任意 `pip install`。 |
 | `slurm` | `slurmstepd`、pending resources、node down/drain、exceeded memory、batch job failed | `slurm_basic.log` | `manual_escalation` | `<none>` | 否 | 是 | 不自动执行 `scancel` 或修改调度器状态。 |
@@ -49,6 +52,9 @@ policy 是 detection 与 action 之间的安全边界。detection 只生成 even
 
 - `network_port` 可在允许时通过 `fix-network-1` 自动恢复；
 - `gpu_oom` 可在允许时通过 `fix-gpu-1` 自动恢复；
+- `cache_write_failed` 可在允许时通过 `fix-cache-1` 自动恢复，只做配置化缓存降级；
+- `optional_dependency_missing` 可在允许时通过 `fix-optional-dep-1` 自动恢复，只关闭可选集成；
+- `worker_overload` 可在允许时通过 `fix-worker-1` 自动恢复，只降低配置化并发；
 - `python_env` 有 `fix-python-1` 候选，但默认测试要求显式允许，且不能执行任意 package install；
 - 高风险企业故障域默认走 `manual_escalation`。
 
@@ -76,6 +82,9 @@ Agent 不会自动执行：
 - Kubernetes `OOMKilled` 归入 `container_k8s`；
 - Linux `cannot allocate memory` 归入 `host_resource`；
 - `No space left on device` 归入 `disk_full`；
+- 缓存上下文中的 `No space left on device` 或 `Errno 28` 归入 `cache_write_failed`；
+- 带 fallback 证据的可选依赖缺失归入 `optional_dependency_missing`；
+- 配置化 worker 并发或队列过载归入 `worker_overload`；
 - `ModuleNotFoundError` 归入 `python_env`；
 - permission denied 归入 `permission_denied`；
 - token、certificate、HTTP 401、HTTP 403 归入 `auth_cert`；

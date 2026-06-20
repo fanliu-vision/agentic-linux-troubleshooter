@@ -128,6 +128,12 @@ class RemediationPlanner:
         for issue_type in ordered_types:
             if issue_type == "gpu":
                 fixes.extend(self._gpu_fixes(evidence_text, project_context))
+            elif issue_type == "cache":
+                fixes.extend(self._cache_fixes(evidence_text, project_context))
+            elif issue_type == "optional_dependency":
+                fixes.extend(self._optional_dependency_fixes(evidence_text, project_context))
+            elif issue_type == "worker_overload":
+                fixes.extend(self._worker_overload_fixes(evidence_text, project_context))
             elif issue_type == "python_env":
                 fixes.extend(self._python_env_fixes(evidence_text, project_context))
             elif issue_type == "disk":
@@ -324,6 +330,141 @@ class RemediationPlanner:
                     "如需清理缓存，应由用户确认目录归属和任务状态后手动处理。",
                 ],
                 apply_supported=True
+            )
+        ]
+
+    def _cache_fixes(self, evidence_text: str, project_context: Any | None = None) -> List[FixAction]:
+        cache_enabled_cfg, cache_enabled_value = self._find_json_config_value(project_context, "cache_enabled")
+        cache_dir_cfg, cache_dir_value = self._find_json_config_value(project_context, "cache_dir")
+        simulate_disk_cfg, simulate_disk_value = self._find_json_config_value(project_context, "simulate_disk_full")
+
+        return [
+            FixAction(
+                fix_id="fix-cache-1",
+                issue_type="cache",
+                title="关闭可选缓存写入并降级到内存缓存",
+                risk_level="low",
+                action_type="safe_config_edit",
+                description=(
+                    "日志显示缓存写入失败，但业务可通过内存缓存或无缓存模式继续运行。"
+                    "该修复只修改项目内 JSON 配置开关，不删除缓存文件。"
+                ),
+                suggested_steps=[
+                    (
+                        f"项目上下文发现 {cache_enabled_cfg} 中 cache_enabled={cache_enabled_value}，"
+                        "可将其改为 false。"
+                        if cache_enabled_cfg
+                        else "优先查找 cache_enabled、feature_cache_enabled 或 cache.write_enabled 等可选缓存开关。"
+                    ),
+                    (
+                        f"项目上下文发现 {simulate_disk_cfg} 中 simulate_disk_full={simulate_disk_value}，"
+                        "Demo 场景可关闭该缓存故障模拟。"
+                        if simulate_disk_cfg
+                        else "如果是 Demo 模拟故障，可关闭 simulate_cache_write_failed 或 simulate_disk_full。"
+                    ),
+                    (
+                        f"当前缓存目录为 {cache_dir_cfg}:{cache_dir_value}，本修复不会清理该目录。"
+                        if cache_dir_cfg
+                        else "不自动清理缓存目录；如需清理必须由人工确认目录归属。"
+                    ),
+                ],
+                verify_commands=[],
+                notes=[
+                    "禁止自动 rm -rf 缓存目录。",
+                    "禁止把通用 disk_full 直接归入自动恢复。",
+                    "修复失败时应降级为 manual_escalation。",
+                ],
+                apply_supported=True,
+            )
+        ]
+
+    def _optional_dependency_fixes(
+        self,
+        evidence_text: str,
+        project_context: Any | None = None,
+    ) -> List[FixAction]:
+        optional_cfg, optional_value = self._find_json_config_value(
+            project_context,
+            "optional_dependency_enabled",
+        )
+        risk_sdk_cfg, risk_sdk_value = self._find_json_config_value(project_context, "risk_sdk_enabled")
+
+        return [
+            FixAction(
+                fix_id="fix-optional-dep-1",
+                issue_type="optional_dependency",
+                title="关闭可选依赖集成并启用内置降级路径",
+                risk_level="low",
+                action_type="safe_config_edit",
+                description=(
+                    "日志显示可选依赖或可选集成缺失，且服务存在本地规则、默认实现或降级路径。"
+                    "该修复只关闭可选集成开关，不修改 Python 环境。"
+                ),
+                suggested_steps=[
+                    (
+                        f"项目上下文发现 {optional_cfg} 中 optional_dependency_enabled={optional_value}，"
+                        "可将其改为 false。"
+                        if optional_cfg
+                        else "优先查找 optional_dependency_enabled、plugins.<name>.enabled 或 risk_sdk_enabled。"
+                    ),
+                    (
+                        f"项目上下文发现 {risk_sdk_cfg} 中 risk_sdk_enabled={risk_sdk_value}，"
+                        "可关闭该可选 SDK。"
+                        if risk_sdk_cfg
+                        else "确认日志中存在 fallback 或 degraded mode 证据后再允许自动恢复。"
+                    ),
+                ],
+                verify_commands=[],
+                notes=[
+                    "禁止自动安装包或修改解释器环境。",
+                    "核心依赖缺失仍属于 python_env，必须人工处理。",
+                    "修复失败时应降级为 manual_escalation。",
+                ],
+                apply_supported=True,
+            )
+        ]
+
+    def _worker_overload_fixes(
+        self,
+        evidence_text: str,
+        project_context: Any | None = None,
+    ) -> List[FixAction]:
+        worker_cfg, worker_value = self._find_json_config_value(project_context, "worker_concurrency")
+        max_workers_cfg, max_workers_value = self._find_json_config_value(project_context, "max_workers")
+
+        return [
+            FixAction(
+                fix_id="fix-worker-1",
+                issue_type="worker_overload",
+                title="降低 worker 并发或预取压力",
+                risk_level="low",
+                action_type="safe_config_edit",
+                description=(
+                    "日志显示 worker pool、队列或预取过载。"
+                    "该修复只降低项目内配置化并发，不停止进程、不杀任务。"
+                ),
+                suggested_steps=[
+                    (
+                        f"项目上下文发现 {worker_cfg} 中 worker_concurrency={worker_value}，"
+                        "可将其降低到 2。"
+                        if worker_cfg
+                        else "优先查找 worker_concurrency、workers、max_workers、consumer_workers。"
+                    ),
+                    (
+                        f"项目上下文发现 {max_workers_cfg} 中 max_workers={max_workers_value}，"
+                        "可将其降低到 2。"
+                        if max_workers_cfg
+                        else "如果队列支持 prefetch 或 batch 参数，也应优先选择配置化降载。"
+                    ),
+                    "修改后重新运行，观察队列积压和启动日志是否恢复正常。",
+                ],
+                verify_commands=[],
+                notes=[
+                    "禁止自动 kill worker 进程。",
+                    "禁止自动重启 systemd 或 Kubernetes 工作负载。",
+                    "主机级资源耗尽仍属于 host_resource，必须人工处理。",
+                ],
+                apply_supported=True,
             )
         ]
 

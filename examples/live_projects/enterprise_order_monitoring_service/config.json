@@ -7,6 +7,10 @@
   "simulate_disk_full": true,
   "simulate_python_env_mismatch": true,
   "fail_on_python_env": false,
+  "cache_enabled": true,
+  "optional_dependency_enabled": true,
+  "worker_concurrency": 8,
+  "simulate_worker_overload": false,
   "cache_dir": "/tmp/acme_order_cache",
   "input_file": "data/orders.jsonl",
   "output_dir": "outputs"

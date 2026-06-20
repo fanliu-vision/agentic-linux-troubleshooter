@@ -49,12 +49,15 @@ class RemediationPolicy:
     1. 只有受控配置修改才允许自动 apply；
     2. 不执行 rm / kill / sudo / scancel / systemctl 等危险动作；
     3. 是否真正自动修，还必须受 projects.yaml 中 policy.auto_recover 和 allow_auto_apply 控制；
-    4. Python 缺包默认不直接 pip install，除非项目显式允许 fix-python-1。
+    4. 通用 Python 缺包仍默认升级；只有可选依赖降级开关可进入 safe_auto_recover。
     """
 
     DEFAULT_FIX_MAPPING = {
         "network_port": "fix-network-1",
         "gpu_oom": "fix-gpu-1",
+        "cache_write_failed": "fix-cache-1",
+        "optional_dependency_missing": "fix-optional-dep-1",
+        "worker_overload": "fix-worker-1",
         "python_env": "fix-python-1",
         "model_path": "fix-model-path-1",
         "config_path": "fix-config-path-1",
@@ -174,6 +177,23 @@ class RemediationPolicy:
                 ),
             )
 
+        if event_type in {
+            "cache_write_failed",
+            "optional_dependency_missing",
+            "worker_overload",
+        }:
+            return RemediationDecision(
+                action="auto_recover",
+                fix_id=fix_id,
+                severity=severity,
+                should_rerun=should_rerun,
+                rollback_on_failure=rollback_on_failure,
+                reason=(
+                    f"事件 `{event_type}` 已映射到低风险配置修复 `{fix_id}`，"
+                    "仅允许修改项目内 JSON 配置字段，并且该 fix_id 已被项目策略显式允许。"
+                ),
+            )
+
         return RemediationDecision(
             action="auto_recover",
             fix_id=fix_id,
@@ -195,6 +215,15 @@ class RemediationPolicy:
 
         if issue_type == "gpu":
             return "fix-gpu-1"
+
+        if issue_type == "cache":
+            return "fix-cache-1"
+
+        if issue_type == "optional_dependency":
+            return "fix-optional-dep-1"
+
+        if issue_type == "worker_overload":
+            return "fix-worker-1"
 
         if issue_type == "python_env":
             return "fix-python-1"

@@ -122,6 +122,9 @@ class AutoRecoveryDecision:
 SAFE_CANDIDATE_EVENT_TYPES = {
     "network_port",
     "gpu_oom",
+    "cache_write_failed",
+    "optional_dependency_missing",
+    "worker_overload",
 }
 
 MANUAL_ESCALATION_EVENT_TYPES = {

@@ -513,8 +513,11 @@ R15-3 resolver 保持保守默认：
 | `auth_cert` | `manual_escalation` |
 | `network_port` | 仅在命中显式允许的 `fix-network-1` 时返回 `safe_auto_recover` candidate |
 | `gpu_oom` | 仅在命中显式允许的 `fix-gpu-1` 时返回 `safe_auto_recover` candidate |
+| `cache_write_failed` | 仅在命中显式允许的 `fix-cache-1` 时返回 `safe_auto_recover` candidate；不代表通用 `disk_full` |
+| `optional_dependency_missing` | 仅在命中显式允许的 `fix-optional-dep-1` 时返回 `safe_auto_recover` candidate；不代表通用 `python_env` |
+| `worker_overload` | 仅在命中显式允许的 `fix-worker-1` 时返回 `safe_auto_recover` candidate；不代表主机级 `host_resource` |
 
-该实现不会改变当前真实可执行恢复范围。R15-3 后，真实恢复仍由既有运行链路、既有 policy allowlist 和既有 AutoRecoveryRunner 边界决定。
+该实现本身只产生策略决策；真实恢复仍由运行链路、项目 policy allowlist、R15 runtime gate、precheck、rollback 和 AutoRecoveryRunner 边界共同决定。
 
 ## 13. R15-4 policy schema dry-run 说明
 
@@ -625,6 +628,9 @@ guarded dry-run 的保守策略：
 | --- | --- |
 | `network_port + fix-network-1` | 可生成 guarded dry-run candidate，但不执行 |
 | `gpu_oom + fix-gpu-1` | 可生成 guarded dry-run candidate，但不扩大动作范围 |
+| `cache_write_failed + fix-cache-1` | 可生成 guarded dry-run candidate；仅允许配置化缓存降级 |
+| `optional_dependency_missing + fix-optional-dep-1` | 可生成 guarded dry-run candidate；仅允许关闭可选集成 |
+| `worker_overload + fix-worker-1` | 可生成 guarded dry-run candidate；仅允许降低配置化并发 |
 | `process_crash` | `manual_escalation` |
 | `container_k8s` | 不允许 `kubectl`，命中禁用动作时 `disabled` |
 | `disk_full` | 不允许 `rm -rf`，命中禁用动作时 `disabled` |

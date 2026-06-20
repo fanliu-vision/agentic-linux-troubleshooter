@@ -35,6 +35,9 @@ def make_policy_project() -> ProjectConfig:
             allow_auto_apply=[
                 "fix-network-1",
                 "fix-gpu-1",
+                "fix-cache-1",
+                "fix-optional-dep-1",
+                "fix-worker-1",
                 "fix-python-1",
             ],
             escalation_required=[],
@@ -58,6 +61,10 @@ def assert_expected_policy_action(case: dict[str, Any], event: Any) -> None:
         decision = RemediationPolicy().decide(event, make_policy_project())
         assert decision.action == "report_only"
         assert not decision.is_auto_recover
+    elif expected_action == "policy_auto_recover":
+        decision = RemediationPolicy().decide(event, make_policy_project())
+        assert decision.action == "auto_recover"
+        assert decision.is_auto_recover
 
 
 @pytest.mark.parametrize(

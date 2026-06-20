@@ -123,6 +123,58 @@ class SafeApplyExecutor:
             ]
             return self._finalize(fix_id, results, "已尝试应用 Python 环境告警修复：关闭 simulate_python_env_mismatch。")
 
+        if fix_id == "fix-cache-1":
+            results = self._update_first_existing_json_field(
+                fix_id=fix_id,
+                candidates=[
+                    ("cache_enabled", False),
+                    ("feature_cache_enabled", False),
+                    ("cache.write_enabled", False),
+                    ("simulate_cache_write_failed", False),
+                    ("simulate_disk_full", False),
+                ],
+            )
+            return self._finalize(
+                fix_id,
+                results,
+                "已尝试应用缓存写入修复：关闭可选缓存写入或缓存故障模拟。",
+            )
+
+        if fix_id == "fix-optional-dep-1":
+            results = self._update_first_existing_json_field(
+                fix_id=fix_id,
+                candidates=[
+                    ("optional_dependency_enabled", False),
+                    ("optional_dependencies.internal_risk_sdk.enabled", False),
+                    ("plugins.internal_risk_sdk.enabled", False),
+                    ("risk_sdk_enabled", False),
+                    ("simulate_python_env_mismatch", False),
+                ],
+            )
+            return self._finalize(
+                fix_id,
+                results,
+                "已尝试应用可选依赖降级修复：关闭可选集成或相关告警模拟。",
+            )
+
+        if fix_id == "fix-worker-1":
+            results = self._update_first_existing_json_field(
+                fix_id=fix_id,
+                candidates=[
+                    ("worker_concurrency", 2),
+                    ("workers", 2),
+                    ("max_workers", 2),
+                    ("consumer_workers", 2),
+                    ("worker.concurrency", 2),
+                    ("server.workers", 2),
+                ],
+            )
+            return self._finalize(
+                fix_id,
+                results,
+                "已尝试应用 worker 过载修复：降低受控并发配置。",
+            )
+
         return ApplyResult(
             success=False,
             fix_id=fix_id,
@@ -172,6 +224,28 @@ class SafeApplyExecutor:
             edit_results=edit_results,
             applied_record_path=str(self.applied_record_path),
         )
+
+    def _update_first_existing_json_field(
+        self,
+        *,
+        fix_id: str,
+        candidates: list[tuple[str, Any]],
+    ) -> list[ConfigEditResult]:
+        results: list[ConfigEditResult] = []
+
+        for field_path, new_value in candidates:
+            result = self.editor.update_json_field(
+                relative_config_path="config.json",
+                field_path=field_path,
+                new_value=new_value,
+                fix_id=fix_id,
+            )
+            results.append(result)
+
+            if result.success:
+                return [result]
+
+        return results
 
     def _finalize(self, fix_id: str, results: list[ConfigEditResult], message: str) -> ApplyResult:
         success = bool(results) and all(item.success for item in results)

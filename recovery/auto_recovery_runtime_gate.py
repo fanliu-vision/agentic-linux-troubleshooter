@@ -24,11 +24,17 @@ from recovery.guarded_auto_recover_dry_run import FORBIDDEN_ACTIONS
 SAFE_FIX_BY_EVENT_TYPE = {
     "network_port": "fix-network-1",
     "gpu_oom": "fix-gpu-1",
+    "cache_write_failed": "fix-cache-1",
+    "optional_dependency_missing": "fix-optional-dep-1",
+    "worker_overload": "fix-worker-1",
 }
 
 ACTION_DESCRIPTIONS = {
     "fix-network-1": "safe JSON config edit: config.json metrics_port -> 9101",
     "fix-gpu-1": "safe JSON config edit: config.json batch_size -> 4",
+    "fix-cache-1": "safe JSON config edit: disable optional cache writes",
+    "fix-optional-dep-1": "safe JSON config edit: disable optional dependency integration",
+    "fix-worker-1": "safe JSON config edit: reduce worker concurrency",
 }
 
 
@@ -89,6 +95,12 @@ def build_runtime_auto_recovery_policy(project: ProjectConfig) -> AutoRecoveryPo
         event_type_policies={
             "network_port": _safe_policy("fix-network-1", dry_run=dry_run_default),
             "gpu_oom": _safe_policy("fix-gpu-1", dry_run=dry_run_default),
+            "cache_write_failed": _safe_policy("fix-cache-1", dry_run=dry_run_default),
+            "optional_dependency_missing": _safe_policy(
+                "fix-optional-dep-1",
+                dry_run=dry_run_default,
+            ),
+            "worker_overload": _safe_policy("fix-worker-1", dry_run=dry_run_default),
             "process_crash": _manual_policy(),
             "container_k8s": _manual_policy(),
             "disk_full": _manual_policy(),

@@ -25,6 +25,9 @@ def make_project() -> ProjectConfig:
             allow_auto_apply=[
                 "fix-network-1",
                 "fix-gpu-1",
+                "fix-cache-1",
+                "fix-optional-dep-1",
+                "fix-worker-1",
                 "fix-python-1",
             ],
             escalation_required=[],
@@ -83,6 +86,29 @@ def test_network_port_and_gpu_auto_recovery_remain_unchanged() -> None:
     assert gpu_decision.action == "auto_recover"
     assert gpu_decision.fix_id == "fix-gpu-1"
     assert gpu_decision.is_auto_recover
+
+
+@pytest.mark.parametrize(
+    ("event_type", "issue_type", "fix_id"),
+    [
+        ("cache_write_failed", "cache", "fix-cache-1"),
+        ("optional_dependency_missing", "optional_dependency", "fix-optional-dep-1"),
+        ("worker_overload", "worker_overload", "fix-worker-1"),
+    ],
+)
+def test_new_safe_auto_recovery_domains_are_explicitly_allowed(
+    event_type: str,
+    issue_type: str,
+    fix_id: str,
+) -> None:
+    decision = RemediationPolicy().decide(
+        make_event(event_type, issue_type),
+        make_project(),
+    )
+
+    assert decision.action == "auto_recover"
+    assert decision.fix_id == fix_id
+    assert decision.is_auto_recover
 
 
 @pytest.mark.parametrize(

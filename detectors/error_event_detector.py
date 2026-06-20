@@ -96,16 +96,29 @@ class ErrorEventDetector:
             ],
         ),
         ErrorRule(
+            event_type="cache_write_failed",
+            issue_type="cache",
+            severity="medium",
+            summary="缓存写入失败，可降级为关闭缓存或内存缓存模式",
+            patterns=[
+                r"cache.*(?:write|persist|flush).*(?:failed|error|warning)",
+                r"(?:failed|unable)\s+to\s+write\s+cache",
+                r"cache.*(?:no space left on device|\berrno\s*28\b|disk quota exceeded)",
+                r"feature cache.*(?:failed|fallback|unavailable)",
+                r"fallback: continue with in-memory feature cache",
+            ],
+        ),
+        ErrorRule(
             event_type="disk_full",
             issue_type="disk",
             severity="high",
-            summary="磁盘空间不足、inode 不足或缓存写入失败",
+            summary="磁盘空间不足或 inode 不足",
             patterns=[
-                r"no space left on device",
-                r"\berrno\s*28\b",
-                r"disk quota exceeded",
+                r"^(?!.*cache).*no space left on device",
+                r"^(?!.*cache).*\berrno\s*28\b",
+                r"^(?!.*cache).*disk quota exceeded",
                 r"no usable temporary directory",
-                r"no space left",
+                r"^(?!.*cache).*no space left",
                 r"inode.*(?:full|exhausted|no space)",
             ],
         ),
@@ -124,6 +137,20 @@ class ErrorEventDetector:
             ],
         ),
         ErrorRule(
+            event_type="optional_dependency_missing",
+            issue_type="optional_dependency",
+            severity="medium",
+            summary="可选依赖或可选集成缺失，可降级关闭相关功能",
+            patterns=[
+                r"optional (?:dependency|integration|plugin).*(?:missing|unavailable|disabled)",
+                r"(?:missing|unavailable) optional (?:dependency|integration|plugin)",
+                r"internal risk sdk unavailable",
+                r"missing acme_internal_sdk",
+                r"fallback.*(?:local rule engine|optional dependency)",
+                r"optional dependency fallback",
+            ],
+        ),
+        ErrorRule(
             event_type="python_env",
             issue_type="python_env",
             severity="medium",
@@ -135,6 +162,21 @@ class ErrorEventDetector:
                 r"python interpreter and pip path do not belong",
                 r"pip path.*python interpreter",
                 r"pkg_resources\.distributionnotfound",
+            ],
+        ),
+        ErrorRule(
+            event_type="worker_overload",
+            issue_type="worker_overload",
+            severity="medium",
+            summary="Worker 并发、队列或预取过高导致过载",
+            patterns=[
+                r"worker.*overload",
+                r"worker pool exhausted",
+                r"too many workers",
+                r"concurrency.*too high",
+                r"prefetch.*too high",
+                r"queue backpressure",
+                r"consumer lag.*too high",
             ],
         ),
         ErrorRule(
@@ -339,7 +381,9 @@ class ErrorEventDetector:
                         )
                     )
 
-        return self._dedupe_and_suppress(candidates)
+        return self._dedupe_and_suppress(
+            self._suppress_generic_events(candidates)
+        )
 
     def detect_all(self, text: str, source: str) -> list[ErrorEvent]:
         """
@@ -408,7 +452,56 @@ class ErrorEventDetector:
         if any(event.issue_type != "log" for event in events):
             events = [event for event in events if event.issue_type != "log"]
 
-        return self._dedupe_detect_all_events(events)
+        return self._dedupe_detect_all_events(
+            self._suppress_generic_events(events)
+        )
+
+    def _suppress_generic_events(self, events: list[ErrorEvent]) -> list[ErrorEvent]:
+        specialized_to_generic = {
+            "cache_write_failed": {"disk_full"},
+            "optional_dependency_missing": {"python_env"},
+            "worker_overload": {"host_resource"},
+        }
+        specialized_events = [
+            event for event in events if event.event_type in specialized_to_generic
+        ]
+        if not specialized_events:
+            return events
+
+        result: list[ErrorEvent] = []
+        for event in events:
+            suppress = False
+            for specialized in specialized_events:
+                generic_types = specialized_to_generic[specialized.event_type]
+                if event.event_type not in generic_types:
+                    continue
+                if self._events_are_same_scope(event, specialized):
+                    suppress = True
+                    break
+
+            if not suppress:
+                result.append(event)
+
+        return result
+
+    def _events_are_same_scope(self, left: ErrorEvent, right: ErrorEvent) -> bool:
+        if left.span_start or left.span_end or right.span_start or right.span_end:
+            overlap_start = max(left.span_start, right.span_start)
+            overlap_end = min(left.span_end, right.span_end)
+            if overlap_start < overlap_end:
+                return True
+
+        if left.line_number and right.line_number:
+            if abs(left.line_number - right.line_number) <= self.DETECT_ALL_BLOCK_GAP_LINES:
+                return True
+
+        left_excerpt = left.raw_excerpt.strip()
+        right_excerpt = right.raw_excerpt.strip()
+        return bool(
+            left_excerpt
+            and right_excerpt
+            and (left_excerpt in right_excerpt or right_excerpt in left_excerpt)
+        )
 
     def _collect_rule_line_matches(self, rule: ErrorRule, lines: list[str]) -> list[tuple[int, str]]:
         matches: list[tuple[int, str]] = []

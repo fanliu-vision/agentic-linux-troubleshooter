@@ -29,6 +29,9 @@ MANUAL_ESCALATION_EVENT_TYPES = {
 GUARDED_DRY_RUN_CANDIDATES = {
     "network_port": {"fix-network-1"},
     "gpu_oom": {"fix-gpu-1"},
+    "cache_write_failed": {"fix-cache-1"},
+    "optional_dependency_missing": {"fix-optional-dep-1"},
+    "worker_overload": {"fix-worker-1"},
 }
 
 

@@ -29,6 +29,10 @@ def simulate_python_env_warning(config: dict) -> None:
     if not config.get("simulate_python_env_mismatch", False):
         return
 
+    if not config.get("optional_dependency_enabled", True):
+        log("[env] optional internal risk SDK disabled; using local rule engine")
+        return
+
     err("[env] CONDA_PREFIX=/opt/conda/envs/order-service")
     err("[env] VIRTUAL_ENV=<not set>")
     err("[env] python=/usr/bin/python3")
@@ -48,12 +52,33 @@ def simulate_cache_warning(config: dict) -> None:
     if not config.get("simulate_disk_full", False):
         return
 
+    if not config.get("cache_enabled", True):
+        log("[cache] optional feature cache disabled; using in-memory cache")
+        return
+
     cache_dir = config.get("cache_dir", "/tmp/acme_order_cache")
 
     err(f"[cache] preparing order feature cache at {cache_dir}")
     err(f"[cache] WARNING: failed to write cache file {cache_dir}/features_0001.bin")
     err(f"OSError: [Errno 28] No space left on device: '{cache_dir}/features_0001.bin'")
     err("[cache] fallback: continue with in-memory feature cache")
+
+
+def simulate_worker_overload_warning(config: dict) -> None:
+    if not config.get("simulate_worker_overload", False):
+        return
+
+    worker_concurrency = int(config.get("worker_concurrency", 1))
+    if worker_concurrency <= 2:
+        log(f"[worker] concurrency={worker_concurrency}; overload guard satisfied")
+        return
+
+    err(
+        "[worker] worker overload: "
+        f"worker_concurrency={worker_concurrency} is too high for startup queue"
+    )
+    err("[worker] worker pool exhausted; concurrency too high")
+    raise RuntimeError("worker overload: concurrency too high")
 
 
 def load_orders(input_file: Path) -> list[dict]:
@@ -150,6 +175,7 @@ def main() -> int:
     try:
         simulate_python_env_warning(config)
         simulate_cache_warning(config)
+        simulate_worker_overload_warning(config)
 
         input_file = Path(config.get("input_file", "data/orders.jsonl"))
         log(f"[data] loading orders from {input_file}")

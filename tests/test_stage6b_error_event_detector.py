@@ -49,7 +49,7 @@ def test_same_error_has_stable_fingerprint_across_timestamps() -> None:
 def test_mixed_log_detects_multiple_specific_events() -> None:
     text = """
 RuntimeError: HIP out of memory. Tried to allocate 1024.00 MiB.
-OSError: [Errno 28] No space left on device: "/tmp/cache"
+OSError: [Errno 28] No space left on device: "/var/lib/order-service/data.bin"
 ModuleNotFoundError: No module named 'yaml'
 slurmstepd: error: Detected 1 oom-kill event(s)
 """

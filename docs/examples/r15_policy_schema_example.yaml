@@ -53,6 +53,21 @@ auto_recovery_policy:
       requires_project_allow: true
       requires_precheck: true
       requires_rollback: true
+    fix-cache-1:
+      risk_level: low
+      requires_project_allow: true
+      requires_precheck: true
+      requires_rollback: true
+    fix-optional-dep-1:
+      risk_level: low
+      requires_project_allow: true
+      requires_precheck: true
+      requires_rollback: true
+    fix-worker-1:
+      risk_level: low
+      requires_project_allow: true
+      requires_precheck: true
+      requires_rollback: true
 
   event_type_policies:
     network_port:
@@ -87,6 +102,70 @@ auto_recovery_policy:
       confidence_required: 0.85
       allowed_fix_ids:
         - fix-gpu-1
+      require_precheck: true
+      require_rollback: true
+      require_operator_confirmation: false
+      cooldown:
+        fingerprint_seconds: 3600
+        event_type_seconds: 1800
+        project_seconds: 600
+      rate_limits:
+        max_per_cycle: 1
+        max_per_hour: 3
+      audit_required: true
+      fallback_strategy: manual_escalation
+
+    cache_write_failed:
+      strategy_layer: safe_auto_recover
+      risk_level: low
+      confidence_required: 0.85
+      allowed_fix_ids:
+        - fix-cache-1
+      forbidden_actions:
+        - rm -rf
+      require_precheck: true
+      require_rollback: true
+      require_operator_confirmation: false
+      cooldown:
+        fingerprint_seconds: 3600
+        event_type_seconds: 1800
+        project_seconds: 600
+      rate_limits:
+        max_per_cycle: 1
+        max_per_hour: 3
+      audit_required: true
+      fallback_strategy: manual_escalation
+
+    optional_dependency_missing:
+      strategy_layer: safe_auto_recover
+      risk_level: low
+      confidence_required: 0.85
+      allowed_fix_ids:
+        - fix-optional-dep-1
+      forbidden_actions:
+        - pip install
+      require_precheck: true
+      require_rollback: true
+      require_operator_confirmation: false
+      cooldown:
+        fingerprint_seconds: 3600
+        event_type_seconds: 1800
+        project_seconds: 600
+      rate_limits:
+        max_per_cycle: 1
+        max_per_hour: 3
+      audit_required: true
+      fallback_strategy: manual_escalation
+
+    worker_overload:
+      strategy_layer: safe_auto_recover
+      risk_level: low
+      confidence_required: 0.85
+      allowed_fix_ids:
+        - fix-worker-1
+      forbidden_actions:
+        - kill -9
+        - systemctl restart
       require_precheck: true
       require_rollback: true
       require_operator_confirmation: false
@@ -165,6 +244,18 @@ r15_dry_run_sample_events:
     fingerprint: fp-gpu-safe
     confidence: 0.95
     candidate_fix_id: fix-gpu-1
+  - event_type: cache_write_failed
+    fingerprint: fp-cache-safe
+    confidence: 0.95
+    candidate_fix_id: fix-cache-1
+  - event_type: optional_dependency_missing
+    fingerprint: fp-optional-dep-safe
+    confidence: 0.95
+    candidate_fix_id: fix-optional-dep-1
+  - event_type: worker_overload
+    fingerprint: fp-worker-safe
+    confidence: 0.95
+    candidate_fix_id: fix-worker-1
   - event_type: process_crash
     fingerprint: fp-process-crash
     confidence: 0.95

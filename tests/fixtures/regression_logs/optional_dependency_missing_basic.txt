@@ -1,0 +1,6 @@
+[env] optional dependency internal_risk_sdk missing
+Traceback (most recent call last):
+  File "/srv/order-service/plugins/internal_risk_sdk.py", line 7, in <module>
+    import acme_internal_sdk
+ModuleNotFoundError: No module named 'acme_internal_sdk'
+[fallback] internal risk SDK unavailable, continue with local rule engine.

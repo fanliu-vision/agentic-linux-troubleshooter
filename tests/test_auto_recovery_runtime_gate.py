@@ -5,13 +5,25 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from detectors import ErrorEvent
 from monitors.project_registry import PolicyConfig, ProjectConfig
 from policies import RemediationPolicy
+import recovery.auto_recovery_runtime_controls as runtime_controls
 from recovery.auto_recovery_runtime_gate import evaluate_runtime_auto_recovery_gate
+
+
+@pytest.fixture(autouse=True)
+def assume_target_port_available(monkeypatch) -> None:
+    monkeypatch.setattr(
+        runtime_controls,
+        "_is_tcp_port_available",
+        lambda host, port: True,
+    )
 
 
 def make_project(
@@ -101,15 +113,14 @@ def test_runtime_gate_allows_live_when_dry_run_is_explicitly_disabled() -> None:
     assert result.selected_fix_id == "fix-network-1"
     assert result.audit_record["execution_result"] == "would_run_r15_live"
     assert result.precheck_result["config_read_status"] == "read_ok"
-    assert result.precheck_result["planned_edits"] == [
-        {
-            "field_path": "metrics_port",
-            "old_value_available": True,
-            "old_value": 9000,
-            "new_value": 9101,
-            "already_target_value": False,
-        }
-    ]
+    assert result.precheck_result["actionable_edit_count"] == 1
+    edit = result.precheck_result["planned_edits"][0]
+    assert edit["field_path"] == "metrics_port"
+    assert edit["old_value"] == 9000
+    assert edit["new_value"] == 9101
+    assert edit["semantic_status"] == "actionable"
+    assert edit["semantic_reason"] == "target_port_available"
+    assert edit["target_port_available"] is True
     assert result.precheck_result["rollback_plan"]["available"] is True
 
 

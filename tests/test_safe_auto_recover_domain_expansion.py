@@ -22,6 +22,7 @@ from recovery.auto_recovery_runtime_gate import (
 from recovery.guarded_auto_recover_dry_run import (
     evaluate_guarded_auto_recover_dry_run,
 )
+from safe_recovery.registry import SAFE_RECOVERY_FIX_IDS
 
 
 SAFE_EXPANSION_CASES = [
@@ -54,7 +55,39 @@ ModuleNotFoundError: No module named 'acme_internal_sdk'
 [worker] worker pool exhausted; concurrency too high
 """,
     ),
+    (
+        "optional_integration_failed",
+        "optional_integration",
+        "fix-optional-integration-1",
+        """
+[integration] optional integration failed: risk enrichment endpoint returned degraded response
+[integration] enrichment client timeout while calling optional enrichment provider
+[fallback] continue with local enrichment rules; this integration can be turned off safely
+""",
+    ),
+    (
+        "notification_sink_failed",
+        "notification_sink",
+        "fix-notification-sink-1",
+        """
+[notification] notification sink failed: webhook delivery returned HTTP 502
+[notification] alert webhook timeout after 2s for optional remote notification channel
+[fallback] console and file notification channels remain available
+""",
+    ),
+    (
+        "queue_backpressure",
+        "queue_backpressure",
+        "fix-queue-backpressure-1",
+        """
+[queue] queue backpressure detected for local consumer pipeline
+[queue] prefetch_count=64 is too high; max_inflight limit exhausted
+[queue] consumer lag too high; lower prefetch and inflight limits before retry
+""",
+    ),
 ]
+
+FIXTURE_DIR = PROJECT_ROOT / "tests" / "fixtures" / "regression_logs"
 
 
 def make_project(
@@ -72,6 +105,9 @@ def make_project(
                     "batch_size": 16,
                     "simulate_disk_full": True,
                     "simulate_python_env_mismatch": True,
+                    "optional_webhook_enabled": True,
+                    "notification": {"webhook_enabled": True},
+                    "prefetch_count": 64,
                     "worker_concurrency": 8,
                 }
             ),
@@ -89,13 +125,7 @@ def make_project(
             auto_recover=True,
             allow_auto_apply=allow_auto_apply
             if allow_auto_apply is not None
-            else [
-                "fix-network-1",
-                "fix-gpu-1",
-                "fix-cache-1",
-                "fix-optional-dep-1",
-                "fix-worker-1",
-            ],
+            else sorted(SAFE_RECOVERY_FIX_IDS),
             rollback_on_failure=True,
             auto_recovery_policy_enabled=True,
             auto_recovery_dry_run=dry_run,
@@ -134,6 +164,87 @@ def test_detector_classifies_new_safe_domains_before_generic_domains(
     assert "disk_full" not in event_types
     assert "python_env" not in event_types
     assert "host_resource" not in event_types
+    assert "dependency_service" not in event_types
+    if event_type == "optional_integration_failed":
+        assert "optional_dependency_missing" not in event_types
+    if event_type == "notification_sink_failed":
+        assert "auth_cert" not in event_types
+    if event_type == "queue_backpressure":
+        assert "worker_overload" not in event_types
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_event_type", "suppressed_event_type"),
+    [
+        (
+            """
+[integration] optional integration unavailable for enrichment client
+[fallback] degraded mode uses local enrichment rules
+""",
+            "optional_integration_failed",
+            "optional_dependency_missing",
+        ),
+        (
+            """
+[notification] notification sink connection timed out for optional webhook
+[fallback] file notification channel remains available
+""",
+            "notification_sink_failed",
+            "network_connectivity",
+        ),
+        (
+            """
+[worker] worker overload caused by queue backpressure
+[queue] prefetch too high for local consumer
+""",
+            "queue_backpressure",
+            "worker_overload",
+        ),
+    ],
+)
+def test_new_safe_domains_suppress_neighboring_generic_domains(
+    text: str,
+    expected_event_type: str,
+    suppressed_event_type: str,
+) -> None:
+    events = ErrorEventDetector().detect(text, source="test.log")
+    event_types = {event.event_type for event in events}
+
+    assert expected_event_type in event_types
+    assert suppressed_event_type not in event_types
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_event_type", "suppressed_event_type"),
+    [
+        (
+            "optional_integration_failed_core_dependency_negative.txt",
+            "python_env",
+            "optional_integration_failed",
+        ),
+        (
+            "notification_sink_failed_auth_negative.txt",
+            "auth_cert",
+            "notification_sink_failed",
+        ),
+        (
+            "queue_backpressure_dependency_service_negative.txt",
+            "dependency_service",
+            "queue_backpressure",
+        ),
+    ],
+)
+def test_stage4_safe_domains_do_not_swallow_manual_negative_fixtures(
+    fixture_name: str,
+    expected_event_type: str,
+    suppressed_event_type: str,
+) -> None:
+    text = (FIXTURE_DIR / fixture_name).read_text(encoding="utf-8")
+    events = ErrorEventDetector().detect(text, source=f"fixture:{fixture_name}")
+    event_types = {event.event_type for event in events}
+
+    assert expected_event_type in event_types
+    assert suppressed_event_type not in event_types
 
 
 @pytest.mark.parametrize(
@@ -266,6 +377,24 @@ def test_policy_dry_run_and_guarded_audit_cover_new_domains() -> None:
             "optional_dependency_enabled",
             False,
         ),
+        (
+            "fix-optional-integration-1",
+            {"optional_webhook_enabled": True},
+            "optional_webhook_enabled",
+            False,
+        ),
+        (
+            "fix-notification-sink-1",
+            {"notification": {"webhook_enabled": True}},
+            "notification.webhook_enabled",
+            False,
+        ),
+        (
+            "fix-queue-backpressure-1",
+            {"prefetch_count": 64},
+            "prefetch_count",
+            2,
+        ),
         ("fix-worker-1", {"worker_concurrency": 8}, "worker_concurrency", 2),
     ],
 )
@@ -299,7 +428,7 @@ def test_safe_apply_executor_modifies_only_controlled_json_fields_and_rolls_back
 
     assert apply_result.success
     data = json.loads(config_path.read_text(encoding="utf-8"))
-    assert data[field_name] == expected_value
+    assert _get_nested_value(data, field_name) == expected_value
     assert apply_result.edit_results[0].field_path == field_name
     assert apply_result.edit_results[0].backup_path
     assert apply_result.edit_results[0].diff_path
@@ -309,6 +438,14 @@ def test_safe_apply_executor_modifies_only_controlled_json_fields_and_rolls_back
     assert rollback_result.success
     rolled_back = json.loads(config_path.read_text(encoding="utf-8"))
     assert rolled_back == original_config
+
+
+def _get_nested_value(data: dict[str, object], field_path: str) -> object:
+    current: object = data
+    for part in field_path.split("."):
+        assert isinstance(current, dict)
+        current = current[part]
+    return current
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,3 @@
+[integration] optional integration failed: risk enrichment endpoint returned degraded response
+[integration] enrichment client timeout while calling optional enrichment provider
+[fallback] continue with local enrichment rules; this integration can be turned off safely

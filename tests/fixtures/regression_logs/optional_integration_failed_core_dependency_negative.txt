@@ -1,0 +1,5 @@
+[integration] optional integration failed while loading billing integration
+Traceback (most recent call last):
+  File "service.py", line 42, in <module>
+ModuleNotFoundError: No module named 'core_billing_sdk'
+[startup] core billing dependency is required; no degraded mode is available

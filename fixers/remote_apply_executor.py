@@ -215,7 +215,11 @@ class RemoteSafeApplyExecutor:
         remote_project_dir: str,
     ) -> RemoteApplyResult:
         candidates = [
-            (candidate.field_path, candidate.new_value)
+            (
+                candidate.field_path,
+                candidate.new_value,
+                candidate.semantic_rule,
+            )
             for candidate in spec.candidates
         ]
         return self._apply_first_existing_remote_field(
@@ -232,22 +236,28 @@ class RemoteSafeApplyExecutor:
         *,
         fix_id: str,
         remote_project_dir: str,
-        candidates: list[tuple[str, Any]],
+        candidates: list[tuple[str, Any, str]],
         success_message: str,
         failure_message: str,
         relative_config_path: str = "config.json",
     ) -> RemoteApplyResult:
         results: list[RemoteConfigEditResult] = []
+        no_op_results: list[RemoteConfigEditResult] = []
 
-        for field_path, new_value in candidates:
+        for field_path, new_value, semantic_rule in candidates:
             result = self.editor.update_json_field(
                 remote_project_dir=remote_project_dir,
                 relative_config_path=relative_config_path,
                 field_path=field_path,
                 new_value=new_value,
                 fix_id=fix_id,
+                semantic_rule=semantic_rule,
             )
             results.append(result)
+
+            if result.success and result.no_op:
+                no_op_results.append(result)
+                continue
 
             if result.success:
                 return self._finalize(
@@ -256,6 +266,14 @@ class RemoteSafeApplyExecutor:
                     [result],
                     f"{success_message} 字段 `{field_path}` 已更新。",
                 )
+
+        if no_op_results:
+            return self._finalize(
+                fix_id,
+                remote_project_dir,
+                [no_op_results[0]],
+                f"{success_message} 字段已处于安全目标值，无需修改。",
+            )
 
         return RemoteApplyResult(
             success=False,
@@ -292,7 +310,7 @@ class RemoteSafeApplyExecutor:
     ) -> RemoteApplyResult:
         success = bool(results) and all(item.success for item in results)
 
-        if success:
+        if success and any(item.backup_path and item.diff_path for item in results):
             self._append_record(fix_id, remote_project_dir, results)
 
         return RemoteApplyResult(
@@ -326,7 +344,7 @@ class RemoteSafeApplyExecutor:
                         "new_value": item.new_value,
                     }
                     for item in results
-                    if item.success
+                    if item.success and item.backup_path and item.diff_path
                 ],
             }
         )

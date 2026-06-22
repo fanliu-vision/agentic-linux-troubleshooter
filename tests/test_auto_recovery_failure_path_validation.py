@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -13,7 +15,17 @@ from detectors import ErrorEvent
 from monitors.cycle_summary_reporter import CycleEventRecord, CycleSummaryReporter
 from monitors.project_registry import PolicyConfig, ProjectConfig
 from notifiers.notification_manager import NotificationManager
+import recovery.auto_recovery_runtime_controls as runtime_controls
 from recovery.auto_recovery_runner import AutoRecoveryRunner
+
+
+@pytest.fixture(autouse=True)
+def assume_target_port_available(monkeypatch) -> None:
+    monkeypatch.setattr(
+        runtime_controls,
+        "_is_tcp_port_available",
+        lambda host, port: True,
+    )
 
 
 class FailurePathSession:

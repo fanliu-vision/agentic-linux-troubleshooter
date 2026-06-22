@@ -11,6 +11,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from detectors import ErrorEvent
 from monitors.project_registry import PolicyConfig, ProjectConfig
 from policies import RemediationPolicy
+from safe_recovery.registry import SAFE_RECOVERY_FIX_IDS
 
 
 def make_project() -> ProjectConfig:
@@ -22,14 +23,7 @@ def make_project() -> ProjectConfig:
         run_command="python app.py",
         policy=PolicyConfig(
             auto_recover=True,
-            allow_auto_apply=[
-                "fix-network-1",
-                "fix-gpu-1",
-                "fix-cache-1",
-                "fix-optional-dep-1",
-                "fix-worker-1",
-                "fix-python-1",
-            ],
+            allow_auto_apply=sorted(SAFE_RECOVERY_FIX_IDS | {"fix-python-1"}),
             escalation_required=[],
         ),
     )
@@ -93,6 +87,17 @@ def test_network_port_and_gpu_auto_recovery_remain_unchanged() -> None:
     [
         ("cache_write_failed", "cache", "fix-cache-1"),
         ("optional_dependency_missing", "optional_dependency", "fix-optional-dep-1"),
+        (
+            "optional_integration_failed",
+            "optional_integration",
+            "fix-optional-integration-1",
+        ),
+        (
+            "notification_sink_failed",
+            "notification_sink",
+            "fix-notification-sink-1",
+        ),
+        ("queue_backpressure", "queue_backpressure", "fix-queue-backpressure-1"),
         ("worker_overload", "worker_overload", "fix-worker-1"),
     ],
 )

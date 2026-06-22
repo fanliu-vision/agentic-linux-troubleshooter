@@ -35,6 +35,48 @@
     "expected_action": "policy_auto_recover"
   },
   {
+    "case_id": "optional_integration_failed_basic",
+    "log_file": "optional_integration_failed_basic.txt",
+    "expected_event_type": "optional_integration_failed",
+    "expected_issue_type": "optional_integration",
+    "expected_action": "policy_auto_recover"
+  },
+  {
+    "case_id": "notification_sink_failed_basic",
+    "log_file": "notification_sink_failed_basic.txt",
+    "expected_event_type": "notification_sink_failed",
+    "expected_issue_type": "notification_sink",
+    "expected_action": "policy_auto_recover"
+  },
+  {
+    "case_id": "queue_backpressure_basic",
+    "log_file": "queue_backpressure_basic.txt",
+    "expected_event_type": "queue_backpressure",
+    "expected_issue_type": "queue_backpressure",
+    "expected_action": "policy_auto_recover"
+  },
+  {
+    "case_id": "optional_integration_core_dependency_negative",
+    "log_file": "optional_integration_failed_core_dependency_negative.txt",
+    "expected_event_type": "python_env",
+    "expected_issue_type": "python_env",
+    "expected_action": "policy_requires_explicit_allow"
+  },
+  {
+    "case_id": "notification_sink_auth_negative",
+    "log_file": "notification_sink_failed_auth_negative.txt",
+    "expected_event_type": "auth_cert",
+    "expected_issue_type": "auth_cert",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "queue_backpressure_dependency_service_negative",
+    "log_file": "queue_backpressure_dependency_service_negative.txt",
+    "expected_event_type": "dependency_service",
+    "expected_issue_type": "dependency_service",
+    "expected_action": "policy_escalation_only"
+  },
+  {
     "case_id": "disk_full_basic",
     "log_file": "disk_full_basic_non_cache.txt",
     "expected_event_type": "disk_full",

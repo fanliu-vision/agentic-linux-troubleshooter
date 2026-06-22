@@ -23,6 +23,9 @@ class RemoteConfigEditResult:
     field_path: str = ""
     old_value: Any = None
     new_value: Any = None
+    no_op: bool = False
+    semantic_status: str = ""
+    semantic_reason: str = ""
     stdout: str = ""
     stderr: str = ""
     return_code: int | None = None
@@ -38,8 +41,14 @@ class RemoteConfigEditResult:
             f"- field_path: `{self.field_path}`",
             f"- old_value: `{self.old_value}`",
             f"- new_value: `{self.new_value}`",
+            f"- no_op: `{self.no_op}`",
             f"- return_code: `{self.return_code}`",
         ]
+
+        if self.semantic_status:
+            lines.append(f"- semantic_status: `{self.semantic_status}`")
+        if self.semantic_reason:
+            lines.append(f"- semantic_reason: `{self.semantic_reason}`")
 
         if self.backup_path:
             lines.append(f"- backup_path: `{self.backup_path}`")
@@ -84,6 +93,7 @@ class RemoteSafeConfigEditor:
         field_path: str,
         new_value: Any,
         fix_id: str,
+        semantic_rule: str = "set_literal",
     ) -> RemoteConfigEditResult:
         payload = {
             "op": "update_json_field",
@@ -92,6 +102,7 @@ class RemoteSafeConfigEditor:
             "field_path": field_path,
             "new_value": new_value,
             "fix_id": fix_id,
+            "semantic_rule": semantic_rule,
         }
 
         return self._run_remote_editor(payload)
@@ -187,6 +198,9 @@ class RemoteSafeConfigEditor:
             field_path=str(data.get("field_path", payload.get("field_path", ""))),
             old_value=data.get("old_value"),
             new_value=data.get("new_value", payload.get("new_value")),
+            no_op=bool(data.get("no_op", False)),
+            semantic_status=str(data.get("semantic_status", "")),
+            semantic_reason=str(data.get("semantic_reason", "")),
             stdout=stdout,
             stderr=stderr,
             return_code=completed.returncode,
@@ -199,6 +213,7 @@ import base64
 import difflib
 import json
 import shutil
+import socket
 import sys
 import time
 from pathlib import Path
@@ -238,6 +253,150 @@ def set_nested(data, field_path, value):
     cur[last] = value
 
 
+def is_int_value(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+SAFE_ENUM_DOWNGRADE_VALUES = {"memory", "local", "file", "console"}
+
+
+def normalize_enum_value(value):
+    return " ".join(value.strip().lower().split())
+
+
+def tcp_port_available(host, port):
+    if not is_int_value(port) or port <= 0 or port > 65535:
+        return False
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((host, port))
+            return True
+        finally:
+            sock.close()
+    except OSError:
+        return False
+
+
+def target_port_host(data):
+    host = data.get("metrics_host", "127.0.0.1")
+    if isinstance(host, str) and host.strip():
+        return host.strip()
+    return "127.0.0.1"
+
+
+def semantic_transition(rule, old_value, new_value, data):
+    if old_value == new_value:
+        return {
+            "semantic_status": "no_op",
+            "semantic_safe": True,
+            "actionable": False,
+            "no_op": True,
+            "semantic_reason": "already_target_value",
+        }
+
+    if rule == "disable_bool":
+        if old_value is True and new_value is False:
+            return {
+                "semantic_status": "actionable",
+                "semantic_safe": True,
+                "actionable": True,
+                "no_op": False,
+                "semantic_reason": "boolean_true_to_false",
+            }
+        return {
+            "semantic_status": "unsafe",
+            "semantic_safe": False,
+            "actionable": False,
+            "no_op": False,
+            "semantic_reason": "boolean_disable_requires_true_to_false",
+        }
+
+    if rule == "lower_int":
+        if not is_int_value(old_value) or not is_int_value(new_value):
+            return {
+                "semantic_status": "unsafe",
+                "semantic_safe": False,
+                "actionable": False,
+                "no_op": False,
+                "semantic_reason": "integer_lowering_requires_int_values",
+            }
+        if old_value > new_value:
+            return {
+                "semantic_status": "actionable",
+                "semantic_safe": True,
+                "actionable": True,
+                "no_op": False,
+                "semantic_reason": "integer_value_will_decrease",
+            }
+        return {
+            "semantic_status": "unsafe",
+            "semantic_safe": False,
+            "actionable": False,
+            "no_op": False,
+            "semantic_reason": "integer_value_would_not_decrease",
+        }
+
+    if rule == "port_available":
+        if not is_int_value(new_value):
+            return {
+                "semantic_status": "unsafe",
+                "semantic_safe": False,
+                "actionable": False,
+                "no_op": False,
+                "semantic_reason": "port_target_requires_int_value",
+            }
+        if tcp_port_available(target_port_host(data), new_value):
+            return {
+                "semantic_status": "actionable",
+                "semantic_safe": True,
+                "actionable": True,
+                "no_op": False,
+                "semantic_reason": "target_port_available",
+            }
+        return {
+            "semantic_status": "unsafe",
+            "semantic_safe": False,
+            "actionable": False,
+            "no_op": False,
+            "semantic_reason": "target_port_not_available",
+        }
+
+    if rule == "safe_enum_downgrade":
+        if not isinstance(old_value, str) or not isinstance(new_value, str):
+            return {
+                "semantic_status": "unsafe",
+                "semantic_safe": False,
+                "actionable": False,
+                "no_op": False,
+                "semantic_reason": "safe_enum_downgrade_requires_string_values",
+            }
+        if normalize_enum_value(new_value) not in SAFE_ENUM_DOWNGRADE_VALUES:
+            return {
+                "semantic_status": "unsafe",
+                "semantic_safe": False,
+                "actionable": False,
+                "no_op": False,
+                "semantic_reason": "safe_enum_target_not_allowlisted",
+            }
+        return {
+            "semantic_status": "actionable",
+            "semantic_safe": True,
+            "actionable": True,
+            "no_op": False,
+            "semantic_reason": "safe_enum_downgrade_target_allowlisted",
+        }
+
+    return {
+        "semantic_status": "actionable",
+        "semantic_safe": True,
+        "actionable": True,
+        "no_op": False,
+        "semantic_reason": "literal_set_allowed",
+    }
+
+
 def main():
     payload = json.loads(base64.b64decode(sys.argv[1]).decode("utf-8"))
     op = payload.get("op")
@@ -252,6 +411,7 @@ def main():
         field_path = payload.get("field_path", "")
         new_value = payload.get("new_value")
         fix_id = payload.get("fix_id", "fix")
+        semantic_rule = payload.get("semantic_rule", "set_literal")
 
         config_path = (project_dir / rel).resolve()
 
@@ -276,7 +436,9 @@ def main():
             result(success=False, message=f"字段不存在：{field_path}", config_path=str(config_path))
             return
 
-        if old_value == new_value:
+        transition = semantic_transition(semantic_rule, old_value, new_value, data)
+
+        if transition.get("no_op"):
             result(
                 success=True,
                 message="字段当前值已经等于目标值，无需修改。",
@@ -284,6 +446,23 @@ def main():
                 field_path=field_path,
                 old_value=old_value,
                 new_value=new_value,
+                no_op=True,
+                semantic_status=transition.get("semantic_status", ""),
+                semantic_reason=transition.get("semantic_reason", ""),
+            )
+            return
+
+        if not transition.get("actionable"):
+            result(
+                success=False,
+                message="字段变更不满足 safe_auto_recover 语义降级要求。",
+                config_path=str(config_path),
+                field_path=field_path,
+                old_value=old_value,
+                new_value=new_value,
+                no_op=False,
+                semantic_status=transition.get("semantic_status", ""),
+                semantic_reason=transition.get("semantic_reason", ""),
             )
             return
 
@@ -322,6 +501,9 @@ def main():
             field_path=field_path,
             old_value=old_value,
             new_value=new_value,
+            no_op=False,
+            semantic_status=transition.get("semantic_status", ""),
+            semantic_reason=transition.get("semantic_reason", ""),
         )
         return
 

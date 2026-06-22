@@ -3,11 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .semantics import (
+    SEMANTIC_DISABLE_BOOL,
+    SEMANTIC_LOWER_INT,
+    SEMANTIC_PORT_AVAILABLE,
+    SEMANTIC_SET_LITERAL,
+)
+
 
 @dataclass(frozen=True)
 class SafeRecoveryFieldCandidate:
     field_path: str
     new_value: Any
+    semantic_rule: str = SEMANTIC_SET_LITERAL
 
 
 @dataclass(frozen=True)
@@ -30,7 +38,13 @@ SAFE_RECOVERY_SPECS: tuple[SafeRecoverySpec, ...] = (
         issue_type="network_port",
         fix_id="fix-network-1",
         relative_config_path="config.json",
-        candidates=(SafeRecoveryFieldCandidate("metrics_port", 9101),),
+        candidates=(
+            SafeRecoveryFieldCandidate(
+                "metrics_port",
+                9101,
+                SEMANTIC_PORT_AVAILABLE,
+            ),
+        ),
         low_risk_reason="only edits the metrics port JSON field",
         action_description="safe JSON config edit: config.json metrics_port -> 9101",
         local_success_message="已尝试应用端口冲突修复：metrics_port 改为 9101。",
@@ -45,12 +59,16 @@ SAFE_RECOVERY_SPECS: tuple[SafeRecoverySpec, ...] = (
         fix_id="fix-gpu-1",
         relative_config_path="config.json",
         candidates=(
-            SafeRecoveryFieldCandidate("batch_size", 4),
-            SafeRecoveryFieldCandidate("train_batch_size", 4),
-            SafeRecoveryFieldCandidate("per_device_train_batch_size", 4),
-            SafeRecoveryFieldCandidate("samples_per_gpu", 4),
-            SafeRecoveryFieldCandidate("training.batch_size", 4),
-            SafeRecoveryFieldCandidate("model.batch_size", 4),
+            SafeRecoveryFieldCandidate("batch_size", 4, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate("train_batch_size", 4, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate(
+                "per_device_train_batch_size",
+                4,
+                SEMANTIC_LOWER_INT,
+            ),
+            SafeRecoveryFieldCandidate("samples_per_gpu", 4, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate("training.batch_size", 4, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate("model.batch_size", 4, SEMANTIC_LOWER_INT),
         ),
         low_risk_reason="only lowers an explicit batch-size style JSON field",
         action_description="safe JSON config edit: config.json batch_size -> 4",
@@ -68,11 +86,27 @@ SAFE_RECOVERY_SPECS: tuple[SafeRecoverySpec, ...] = (
         fix_id="fix-cache-1",
         relative_config_path="config.json",
         candidates=(
-            SafeRecoveryFieldCandidate("cache_enabled", False),
-            SafeRecoveryFieldCandidate("feature_cache_enabled", False),
-            SafeRecoveryFieldCandidate("cache.write_enabled", False),
-            SafeRecoveryFieldCandidate("simulate_cache_write_failed", False),
-            SafeRecoveryFieldCandidate("simulate_disk_full", False),
+            SafeRecoveryFieldCandidate("cache_enabled", False, SEMANTIC_DISABLE_BOOL),
+            SafeRecoveryFieldCandidate(
+                "feature_cache_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "cache.write_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "simulate_cache_write_failed",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "simulate_disk_full",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
         ),
         low_risk_reason="only disables optional cache write behavior",
         action_description="safe JSON config edit: disable optional cache writes",
@@ -94,14 +128,31 @@ SAFE_RECOVERY_SPECS: tuple[SafeRecoverySpec, ...] = (
         fix_id="fix-optional-dep-1",
         relative_config_path="config.json",
         candidates=(
-            SafeRecoveryFieldCandidate("optional_dependency_enabled", False),
+            SafeRecoveryFieldCandidate(
+                "optional_dependency_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
             SafeRecoveryFieldCandidate(
                 "optional_dependencies.internal_risk_sdk.enabled",
                 False,
+                SEMANTIC_DISABLE_BOOL,
             ),
-            SafeRecoveryFieldCandidate("plugins.internal_risk_sdk.enabled", False),
-            SafeRecoveryFieldCandidate("risk_sdk_enabled", False),
-            SafeRecoveryFieldCandidate("simulate_python_env_mismatch", False),
+            SafeRecoveryFieldCandidate(
+                "plugins.internal_risk_sdk.enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "risk_sdk_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "simulate_python_env_mismatch",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
         ),
         low_risk_reason="only disables an optional integration or demo warning flag",
         action_description=(
@@ -120,17 +171,151 @@ SAFE_RECOVERY_SPECS: tuple[SafeRecoverySpec, ...] = (
         ),
     ),
     SafeRecoverySpec(
+        event_type="optional_integration_failed",
+        issue_type="optional_integration",
+        fix_id="fix-optional-integration-1",
+        relative_config_path="config.json",
+        candidates=(
+            SafeRecoveryFieldCandidate(
+                "optional_webhook_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "risk_sdk_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "enrichment_client_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "optional_integrations.risk_sdk.enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "optional_integrations.enrichment.enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "simulate_optional_integration_failed",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+        ),
+        low_risk_reason="only disables optional integration clients",
+        action_description=(
+            "safe JSON config edit: disable failed optional integration"
+        ),
+        local_success_message=(
+            "已尝试应用可选集成降级修复：关闭失败的可选外部集成。"
+        ),
+        remote_success_message=(
+            "已远程应用可选集成降级修复：关闭失败的可选外部集成。"
+        ),
+        remote_failure_message=(
+            "远程可选集成降级修复失败：未找到受控可选集成开关字段。"
+            "已检查 optional_webhook_enabled、risk_sdk_enabled、"
+            "enrichment_client_enabled、optional_integrations.risk_sdk.enabled、"
+            "optional_integrations.enrichment.enabled、simulate_optional_integration_failed。"
+        ),
+    ),
+    SafeRecoverySpec(
+        event_type="notification_sink_failed",
+        issue_type="notification_sink",
+        fix_id="fix-notification-sink-1",
+        relative_config_path="config.json",
+        candidates=(
+            SafeRecoveryFieldCandidate(
+                "notification.webhook_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "notifications.webhook.enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "notification.remote_sink_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "notification_sink.webhook_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "simulate_notification_sink_failed",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+        ),
+        low_risk_reason="only disables optional remote notification sinks",
+        action_description=(
+            "safe JSON config edit: disable failed optional notification sink"
+        ),
+        local_success_message=(
+            "已尝试应用通知后端降级修复：关闭失败的可选远程通知 sink。"
+        ),
+        remote_success_message=(
+            "已远程应用通知后端降级修复：关闭失败的可选远程通知 sink。"
+        ),
+        remote_failure_message=(
+            "远程通知后端降级修复失败：未找到受控通知 sink 开关字段。"
+            "已检查 notification.webhook_enabled、notifications.webhook.enabled、"
+            "notification.remote_sink_enabled、notification_sink.webhook_enabled、"
+            "simulate_notification_sink_failed。"
+        ),
+    ),
+    SafeRecoverySpec(
+        event_type="queue_backpressure",
+        issue_type="queue_backpressure",
+        fix_id="fix-queue-backpressure-1",
+        relative_config_path="config.json",
+        candidates=(
+            SafeRecoveryFieldCandidate("prefetch_count", 2, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate("max_inflight", 10, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate("consumer_workers", 2, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate("queue.prefetch_count", 2, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate("queue.max_inflight", 10, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate(
+                "queue.consumer_workers",
+                2,
+                SEMANTIC_LOWER_INT,
+            ),
+        ),
+        low_risk_reason="only lowers explicit queue consumer pressure parameters",
+        action_description="safe JSON config edit: reduce queue prefetch and inflight limits",
+        local_success_message=(
+            "已尝试应用队列背压修复：降低受控 prefetch / inflight / consumer 参数。"
+        ),
+        remote_success_message=(
+            "已远程应用队列背压修复：降低受控 prefetch / inflight / consumer 参数。"
+        ),
+        remote_failure_message=(
+            "远程队列背压修复失败：未找到受控队列参数字段。"
+            "已检查 prefetch_count、max_inflight、consumer_workers、"
+            "queue.prefetch_count、queue.max_inflight、queue.consumer_workers。"
+        ),
+    ),
+    SafeRecoverySpec(
         event_type="worker_overload",
         issue_type="worker_overload",
         fix_id="fix-worker-1",
         relative_config_path="config.json",
         candidates=(
-            SafeRecoveryFieldCandidate("worker_concurrency", 2),
-            SafeRecoveryFieldCandidate("workers", 2),
-            SafeRecoveryFieldCandidate("max_workers", 2),
-            SafeRecoveryFieldCandidate("consumer_workers", 2),
-            SafeRecoveryFieldCandidate("worker.concurrency", 2),
-            SafeRecoveryFieldCandidate("server.workers", 2),
+            SafeRecoveryFieldCandidate("worker_concurrency", 2, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate("workers", 2, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate("max_workers", 2, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate("consumer_workers", 2, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate("worker.concurrency", 2, SEMANTIC_LOWER_INT),
+            SafeRecoveryFieldCandidate("server.workers", 2, SEMANTIC_LOWER_INT),
         ),
         low_risk_reason="only lowers an explicit worker concurrency JSON field",
         action_description="safe JSON config edit: reduce worker concurrency",

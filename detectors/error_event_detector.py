@@ -140,7 +140,7 @@ class ErrorEventDetector:
             event_type="optional_dependency_missing",
             issue_type="optional_dependency",
             severity="medium",
-            summary="可选依赖或可选集成缺失，可降级关闭相关功能",
+            summary="可选依赖缺失，可降级关闭相关功能",
             patterns=[
                 r"optional (?:dependency|integration|plugin).*(?:missing|unavailable|disabled)",
                 r"(?:missing|unavailable) optional (?:dependency|integration|plugin)",
@@ -148,6 +148,32 @@ class ErrorEventDetector:
                 r"missing acme_internal_sdk",
                 r"fallback.*(?:local rule engine|optional dependency)",
                 r"optional dependency fallback",
+            ],
+        ),
+        ErrorRule(
+            event_type="optional_integration_failed",
+            issue_type="optional_integration",
+            severity="medium",
+            summary="可选外部集成失败，可降级关闭相关集成",
+            patterns=[
+                r"optional integration.*(?:failed|unavailable|timeout|degraded)",
+                r"optional webhook.*(?:failed|unavailable|timeout|disabled)",
+                r"risk sdk integration.*(?:failed|unavailable|timeout|degraded)",
+                r"enrichment client.*(?:failed|unavailable|timeout|degraded)",
+                r"fallback.*(?:local rule engine|local enrichment|degraded mode).*optional integration",
+            ],
+        ),
+        ErrorRule(
+            event_type="notification_sink_failed",
+            issue_type="notification_sink",
+            severity="medium",
+            summary="可选通知后端失败，可降级保留本地 file/console 通道",
+            patterns=[
+                r"notification sink.*(?:failed|unavailable|timeout|degraded)",
+                r"notification webhook.*(?:failed|timeout|http\s+5\d\d|unavailable)",
+                r"alert webhook.*(?:failed|timeout|http\s+5\d\d|unavailable)",
+                r"fallback.*(?:console|file).*notification",
+                r"notification.*(?:degraded|fallback).*(?:console|file)",
             ],
         ),
         ErrorRule(
@@ -165,18 +191,28 @@ class ErrorEventDetector:
             ],
         ),
         ErrorRule(
+            event_type="queue_backpressure",
+            issue_type="queue_backpressure",
+            severity="medium",
+            summary="队列背压、预取或 inflight 参数过高",
+            patterns=[
+                r"queue backpressure",
+                r"prefetch.*too high",
+                r"max[_ -]?inflight.*(?:exhausted|too high|limit)",
+                r"consumer lag.*too high",
+                r"queue consumer.*(?:lag|backpressure|overloaded)",
+            ],
+        ),
+        ErrorRule(
             event_type="worker_overload",
             issue_type="worker_overload",
             severity="medium",
-            summary="Worker 并发、队列或预取过高导致过载",
+            summary="Worker 并发过高导致过载",
             patterns=[
                 r"worker.*overload",
                 r"worker pool exhausted",
                 r"too many workers",
                 r"concurrency.*too high",
-                r"prefetch.*too high",
-                r"queue backpressure",
-                r"consumer lag.*too high",
             ],
         ),
         ErrorRule(
@@ -460,17 +496,39 @@ class ErrorEventDetector:
         specialized_to_generic = {
             "cache_write_failed": {"disk_full"},
             "optional_dependency_missing": {"python_env"},
+            "optional_integration_failed": {"optional_dependency_missing"},
+            "notification_sink_failed": {"network_connectivity"},
+            "queue_backpressure": {"worker_overload"},
             "worker_overload": {"host_resource"},
+        }
+        manual_to_safe = {
+            "python_env": {"optional_integration_failed"},
+            "auth_cert": {"notification_sink_failed"},
+            "dependency_service": {"queue_backpressure"},
         }
         specialized_events = [
             event for event in events if event.event_type in specialized_to_generic
         ]
-        if not specialized_events:
+        manual_events = [
+            event for event in events if event.event_type in manual_to_safe
+        ]
+        if not specialized_events and not manual_events:
             return events
 
         result: list[ErrorEvent] = []
         for event in events:
             suppress = False
+            for manual in manual_events:
+                safe_types = manual_to_safe[manual.event_type]
+                if event.event_type not in safe_types:
+                    continue
+                if self._events_are_same_scope(event, manual):
+                    suppress = True
+                    break
+
+            if suppress:
+                continue
+
             for specialized in specialized_events:
                 generic_types = specialized_to_generic[specialized.event_type]
                 if event.event_type not in generic_types:

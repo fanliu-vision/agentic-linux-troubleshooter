@@ -1,0 +1,3 @@
+[notification] notification sink failed: webhook returned HTTP 401
+[auth] token expired for notification webhook credentials
+[fallback] do not change notification settings until credentials are rotated

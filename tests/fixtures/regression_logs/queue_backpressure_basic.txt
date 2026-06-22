@@ -1,0 +1,3 @@
+[queue] queue backpressure detected for local consumer pipeline
+[queue] prefetch_count=64 is too high; max_inflight limit exhausted
+[queue] consumer lag too high; lower prefetch and inflight limits before retry

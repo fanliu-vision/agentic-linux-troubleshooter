@@ -32,6 +32,15 @@ from safe_recovery.registry import (
 )
 
 
+@pytest.fixture(autouse=True)
+def assume_target_port_available(monkeypatch) -> None:
+    monkeypatch.setattr(
+        SafeApplyExecutor,
+        "_is_tcp_port_available",
+        staticmethod(lambda host, port: True),
+    )
+
+
 def make_project() -> ProjectConfig:
     return ProjectConfig(
         project_id="safe_registry",

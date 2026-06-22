@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
+import socket
 import time
 from pathlib import Path
 from typing import Any, Callable
 
 from monitors.project_registry import ProjectConfig
+from safe_recovery.semantics import (
+    SEMANTIC_PORT_AVAILABLE,
+    deferred_transition,
+    evaluate_safe_transition,
+)
 from safe_recovery.registry import (
     SAFE_RECOVERY_SPECS_BY_FIX_ID as SAFE_FIX_SAFETY_SPECS,
     SafeRecoveryFieldCandidate as FixFieldCandidate,
@@ -48,9 +54,24 @@ def build_runtime_precheck_result(
     if read_result["status"] == "read_ok" and not planned_edits:
         reasons.append("target_config_field_missing")
 
+    unsafe_planned_edits = [
+        item for item in planned_edits if item.get("semantic_status") == "unsafe"
+    ]
+    actionable_planned_edits = [
+        item for item in planned_edits if item.get("actionable") is True
+    ]
+    no_op_planned_edits = [
+        item for item in planned_edits if item.get("no_op") is True
+    ]
+
+    if unsafe_planned_edits and not actionable_planned_edits:
+        reasons.append("unsafe_semantic_transition")
+
     rollback_plan = _rollback_plan(project=project, spec=spec)
     if not rollback_plan["available"]:
         reasons.append("rollback_plan_unavailable")
+
+    no_op = bool(no_op_planned_edits and not actionable_planned_edits and not unsafe_planned_edits)
 
     return {
         "passed": not reasons,
@@ -63,6 +84,17 @@ def build_runtime_precheck_result(
         "target_config_path": read_result["config_path"],
         "config_read_status": read_result["status"],
         "planned_edits": planned_edits,
+        "actionable_planned_edits": actionable_planned_edits,
+        "no_op_planned_edits": no_op_planned_edits,
+        "unsafe_planned_edits": unsafe_planned_edits,
+        "actionable_edit_count": len(actionable_planned_edits),
+        "no_op": no_op,
+        "semantic_status": _semantic_status(
+            planned_edits=planned_edits,
+            actionable_planned_edits=actionable_planned_edits,
+            no_op_planned_edits=no_op_planned_edits,
+            unsafe_planned_edits=unsafe_planned_edits,
+        ),
         "checked_candidate_fields": [
             item.field_path for item in spec.candidates
         ],
@@ -230,6 +262,7 @@ def _read_config(
                     "old_value": None,
                     "new_value": item.new_value,
                     "already_target_value": False,
+                    **deferred_transition(item.semantic_rule),
                 }
                 for item in spec.candidates
             ],
@@ -252,6 +285,25 @@ def _read_config(
     for item in spec.candidates:
         ok, old_value = _try_get_nested_value(data, item.field_path)
         if ok:
+            port_available = None
+            port_host = None
+            if item.semantic_rule == SEMANTIC_PORT_AVAILABLE and old_value != item.new_value:
+                port_host = _target_port_host(data)
+                port_available = _is_tcp_port_available(port_host, item.new_value)
+
+            transition = evaluate_safe_transition(
+                semantic_rule=item.semantic_rule,
+                old_value=old_value,
+                new_value=item.new_value,
+                port_available=port_available,
+            )
+            port_fields = {}
+            if item.semantic_rule == SEMANTIC_PORT_AVAILABLE:
+                port_fields = {
+                    "target_port_host": port_host,
+                    "target_port_available": port_available,
+                }
+
             planned_edits.append(
                 {
                     "field_path": item.field_path,
@@ -259,6 +311,8 @@ def _read_config(
                     "old_value": old_value,
                     "new_value": item.new_value,
                     "already_target_value": old_value == item.new_value,
+                    **transition,
+                    **port_fields,
                 }
             )
 
@@ -292,3 +346,44 @@ def _try_get_nested_value(data: dict[str, Any], field_path: str) -> tuple[bool, 
             return False, None
         current = current[part]
     return True, current
+
+
+def _semantic_status(
+    *,
+    planned_edits: list[dict[str, Any]],
+    actionable_planned_edits: list[dict[str, Any]],
+    no_op_planned_edits: list[dict[str, Any]],
+    unsafe_planned_edits: list[dict[str, Any]],
+) -> str:
+    if unsafe_planned_edits:
+        if not actionable_planned_edits:
+            return "unsafe"
+    if actionable_planned_edits:
+        return "actionable"
+    if no_op_planned_edits:
+        return "no_op"
+    if planned_edits:
+        return "unknown"
+    return "no_target"
+
+
+def _target_port_host(data: dict[str, Any]) -> str:
+    ok, host = _try_get_nested_value(data, "metrics_host")
+    if ok and isinstance(host, str) and host.strip():
+        return host.strip()
+    return "127.0.0.1"
+
+
+def _is_tcp_port_available(host: str, port: Any) -> bool:
+    if not isinstance(port, int) or isinstance(port, bool):
+        return False
+    if port <= 0 or port > 65535:
+        return False
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((host, port))
+        return True
+    except OSError:
+        return False

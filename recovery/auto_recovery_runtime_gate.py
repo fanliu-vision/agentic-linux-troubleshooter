@@ -180,10 +180,13 @@ def evaluate_runtime_auto_recovery_gate(
 
     dry_run = bool(policy_decision.dry_run)
     auto_recover_allowed = bool(policy_decision.auto_recover_allowed)
+    has_actionable_edit = _has_actionable_planned_edit(precheck_result)
     allowed_to_execute = (
         auto_recover_allowed
         and not dry_run
         and precheck_result.get("passed") is True
+        and has_actionable_edit
+        and precheck_result.get("no_op") is not True
         and cooldown_result.get("allowed") is True
         and rollback_available
         and not policy_decision.operator_required
@@ -338,6 +341,12 @@ def _first_failed_gate_reason(
         reasons = precheck_result.get("reasons") or ["precheck_failed"]
         return str(reasons[0])
 
+    if precheck_result.get("no_op") is True:
+        return "no_op_already_safe"
+
+    if precheck_result.get("actionable_edit_count") == 0:
+        return "no_actionable_planned_edit"
+
     if cooldown_result.get("allowed") is not True:
         return str(cooldown_result.get("reason") or "cooldown_not_satisfied")
 
@@ -349,12 +358,16 @@ def _first_failed_gate_reason(
 
 def _build_audit_record(result: RuntimeAutoRecoveryGateResult) -> dict[str, Any]:
     execution_result = (
-        "would_run_r15_live"
-        if result.would_execute
+        "not_run_r15_no_op"
+        if result.precheck_result.get("no_op") is True
         else (
-            "not_run_r15_dry_run"
-            if result.dry_run and result.auto_recover_allowed
-            else "not_run_r15_gate_blocked"
+            "would_run_r15_live"
+            if result.would_execute
+            else (
+                "not_run_r15_dry_run"
+                if result.dry_run and result.auto_recover_allowed
+                else "not_run_r15_gate_blocked"
+            )
         )
     )
 
@@ -453,6 +466,13 @@ def _matches_forbidden_text(values: list[str]) -> bool:
 def _has_forbidden_action(result: RuntimeAutoRecoveryGateResult) -> bool:
     reasons = result.precheck_result.get("reasons") or []
     return result.downgrade_reason == "forbidden_action" or "forbidden_action" in reasons
+
+
+def _has_actionable_planned_edit(precheck_result: dict[str, Any]) -> bool:
+    try:
+        return int(precheck_result.get("actionable_edit_count", 0)) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _normalize_text(value: str) -> str:

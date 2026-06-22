@@ -13,6 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from detectors import ErrorEventDetector
 from monitors.project_registry import PolicyConfig, ProjectConfig
 from policies import RemediationPolicy
+from safe_recovery.registry import SAFE_RECOVERY_FIX_IDS
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "regression_logs"
@@ -32,14 +33,7 @@ def make_policy_project() -> ProjectConfig:
         run_command="python app.py",
         policy=PolicyConfig(
             auto_recover=True,
-            allow_auto_apply=[
-                "fix-network-1",
-                "fix-gpu-1",
-                "fix-cache-1",
-                "fix-optional-dep-1",
-                "fix-worker-1",
-                "fix-python-1",
-            ],
+            allow_auto_apply=sorted(SAFE_RECOVERY_FIX_IDS | {"fix-python-1"}),
             escalation_required=[],
         ),
     )

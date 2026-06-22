@@ -14,8 +14,14 @@ from .registry import (
     safe_fix_id_for_event_type,
     safe_fix_id_for_issue_type,
 )
+from .registry_governance import (
+    KNOWN_SEMANTIC_RULES,
+    SafeRecoveryRegistryGovernanceInputs,
+    validate_safe_recovery_registry_governance,
+)
 
 __all__ = [
+    "KNOWN_SEMANTIC_RULES",
     "SAFE_ACTION_DESCRIPTIONS",
     "SAFE_FIX_BY_EVENT_TYPE",
     "SAFE_FIX_BY_ISSUE_TYPE",
@@ -24,10 +30,12 @@ __all__ = [
     "SAFE_RECOVERY_SPECS_BY_EVENT_TYPE",
     "SAFE_RECOVERY_SPECS_BY_FIX_ID",
     "SafeRecoveryFieldCandidate",
+    "SafeRecoveryRegistryGovernanceInputs",
     "SafeRecoverySpec",
     "get_safe_recovery_spec_by_fix_id",
     "get_safe_recovery_spec_for_event_type",
     "iter_safe_recovery_specs",
     "safe_fix_id_for_event_type",
     "safe_fix_id_for_issue_type",
+    "validate_safe_recovery_registry_governance",
 ]

@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import json
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from fixers.safe_config_editor import ConfigEditResult, SafeConfigEditor
+from safe_recovery.semantics import (
+    SEMANTIC_PORT_AVAILABLE,
+    evaluate_safe_transition,
+)
 from safe_recovery.registry import (
     SAFE_RECOVERY_FIX_IDS,
+    SafeRecoveryFieldCandidate,
     SafeRecoverySpec,
     get_safe_recovery_spec_by_fix_id,
 )
@@ -165,20 +171,128 @@ class SafeApplyExecutor:
         return set(SAFE_RECOVERY_FIX_IDS)
 
     def _apply_safe_registry_fix(self, spec: SafeRecoverySpec) -> ApplyResult:
-        candidates = [
-            (candidate.field_path, candidate.new_value)
-            for candidate in spec.candidates
-        ]
-        results = self._update_first_existing_json_field(
-            fix_id=spec.fix_id,
-            relative_config_path=spec.relative_config_path,
-            candidates=candidates,
-        )
+        results = self._update_first_safe_registry_field(spec)
         return self._finalize(
             spec.fix_id,
             results,
             spec.local_success_message,
         )
+
+    def _update_first_safe_registry_field(
+        self,
+        spec: SafeRecoverySpec,
+    ) -> list[ConfigEditResult]:
+        config_path = (self.project_dir / spec.relative_config_path).resolve()
+
+        if not self.editor._is_inside_project(config_path):
+            return [
+                ConfigEditResult(
+                    success=False,
+                    message="配置文件路径不在 project_dir 内，拒绝修改。",
+                    config_path=str(config_path),
+                )
+            ]
+
+        if not config_path.exists():
+            return [
+                ConfigEditResult(
+                    success=False,
+                    message="配置文件不存在。",
+                    config_path=str(config_path),
+                )
+            ]
+
+        if config_path.suffix.lower() != ".json":
+            return [
+                ConfigEditResult(
+                    success=False,
+                    message="当前 SafeApplyExecutor 仅支持 .json 配置文件。",
+                    config_path=str(config_path),
+                )
+            ]
+
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return [
+                ConfigEditResult(
+                    success=False,
+                    message=f"读取或解析 JSON 失败：{type(exc).__name__}: {exc}",
+                    config_path=str(config_path),
+                )
+            ]
+
+        results: list[ConfigEditResult] = []
+        no_op_results: list[ConfigEditResult] = []
+
+        for candidate in spec.candidates:
+            ok, old_value = self._try_get_nested_value(data, candidate.field_path)
+            if not ok:
+                results.append(
+                    ConfigEditResult(
+                        success=False,
+                        message=f"字段不存在：{candidate.field_path}",
+                        config_path=str(config_path),
+                        field_path=candidate.field_path,
+                        new_value=candidate.new_value,
+                    )
+                )
+                continue
+
+            transition = self._semantic_transition(
+                data=data,
+                candidate=candidate,
+                old_value=old_value,
+            )
+
+            if transition["no_op"]:
+                no_op_results.append(
+                    ConfigEditResult(
+                        success=True,
+                        message="字段当前值已经处于安全目标值，无需修改。",
+                        config_path=str(config_path),
+                        field_path=candidate.field_path,
+                        old_value=old_value,
+                        new_value=candidate.new_value,
+                        no_op=True,
+                        semantic_status=str(transition["semantic_status"]),
+                        semantic_reason=str(transition["semantic_reason"]),
+                    )
+                )
+                continue
+
+            if not transition["actionable"]:
+                results.append(
+                    ConfigEditResult(
+                        success=False,
+                        message=(
+                            "字段变更不满足 safe_auto_recover 语义降级要求："
+                            f"{transition['semantic_reason']}"
+                        ),
+                        config_path=str(config_path),
+                        field_path=candidate.field_path,
+                        old_value=old_value,
+                        new_value=candidate.new_value,
+                        semantic_status=str(transition["semantic_status"]),
+                        semantic_reason=str(transition["semantic_reason"]),
+                    )
+                )
+                continue
+
+            result = self.editor.update_json_field(
+                relative_config_path=spec.relative_config_path,
+                field_path=candidate.field_path,
+                new_value=candidate.new_value,
+                fix_id=spec.fix_id,
+            )
+            result.semantic_status = str(transition["semantic_status"])
+            result.semantic_reason = str(transition["semantic_reason"])
+            return [result]
+
+        if no_op_results:
+            return [no_op_results[0]]
+
+        return results
 
     def _update_first_existing_json_field(
         self,
@@ -206,7 +320,7 @@ class SafeApplyExecutor:
     def _finalize(self, fix_id: str, results: list[ConfigEditResult], message: str) -> ApplyResult:
         success = bool(results) and all(item.success for item in results)
 
-        if success:
+        if success and any(item.backup_path and item.diff_path for item in results):
             self._append_record(fix_id, results)
 
         return ApplyResult(
@@ -233,7 +347,7 @@ class SafeApplyExecutor:
                         "new_value": item.new_value,
                     }
                     for item in results
-                    if item.success
+                    if item.success and item.backup_path and item.diff_path
                 ],
             }
         )
@@ -254,3 +368,54 @@ class SafeApplyExecutor:
             json.dumps(records, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+
+    def _semantic_transition(
+        self,
+        *,
+        data: dict[str, Any],
+        candidate: SafeRecoveryFieldCandidate,
+        old_value: Any,
+    ) -> dict[str, Any]:
+        port_available = None
+        if candidate.semantic_rule == SEMANTIC_PORT_AVAILABLE and old_value != candidate.new_value:
+            port_available = self._is_tcp_port_available(
+                host=self._target_port_host(data),
+                port=candidate.new_value,
+            )
+
+        return evaluate_safe_transition(
+            semantic_rule=candidate.semantic_rule,
+            old_value=old_value,
+            new_value=candidate.new_value,
+            port_available=port_available,
+        )
+
+    @staticmethod
+    def _try_get_nested_value(data: dict[str, Any], field_path: str) -> tuple[bool, Any]:
+        current: Any = data
+        for part in field_path.split("."):
+            if not isinstance(current, dict) or part not in current:
+                return False, None
+            current = current[part]
+        return True, current
+
+    def _target_port_host(self, data: dict[str, Any]) -> str:
+        ok, host = self._try_get_nested_value(data, "metrics_host")
+        if ok and isinstance(host, str) and host.strip():
+            return host.strip()
+        return "127.0.0.1"
+
+    @staticmethod
+    def _is_tcp_port_available(host: str, port: Any) -> bool:
+        if not isinstance(port, int) or isinstance(port, bool):
+            return False
+        if port <= 0 or port > 65535:
+            return False
+
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind((host, port))
+            return True
+        except OSError:
+            return False

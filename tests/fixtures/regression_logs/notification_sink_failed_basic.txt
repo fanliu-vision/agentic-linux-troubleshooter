@@ -1,0 +1,3 @@
+[notification] notification sink failed: webhook delivery returned HTTP 502
+[notification] alert webhook timeout after 2s for optional remote notification channel
+[fallback] console and file notification channels remain available

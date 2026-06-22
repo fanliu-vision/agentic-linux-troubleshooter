@@ -19,6 +19,9 @@ class ConfigEditResult:
     old_value: Any = None
     new_value: Any = None
     field_path: str = ""
+    no_op: bool = False
+    semantic_status: str = ""
+    semantic_reason: str = ""
 
     def to_markdown(self) -> str:
         lines = [
@@ -30,6 +33,13 @@ class ConfigEditResult:
             f"- old_value: `{self.old_value}`",
             f"- new_value: `{self.new_value}`",
         ]
+
+        if self.semantic_status:
+            lines.append(f"- semantic_status: `{self.semantic_status}`")
+        if self.semantic_reason:
+            lines.append(f"- semantic_reason: `{self.semantic_reason}`")
+        if self.no_op:
+            lines.append("- no_op: `True`")
 
         if self.backup_path:
             lines.append(f"- backup_path: `{self.backup_path}`")
@@ -126,6 +136,9 @@ class SafeConfigEditor:
                 field_path=field_path,
                 old_value=old_value,
                 new_value=new_value,
+                no_op=True,
+                semantic_status="no_op",
+                semantic_reason="already_target_value",
             )
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

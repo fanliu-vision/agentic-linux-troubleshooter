@@ -33,6 +33,18 @@ from safe_recovery.semantics import (
 )
 
 
+REQUIRED_PRIVILEGE_ESCALATION_ALIASES = {
+    "sudo",
+    "/usr/bin/sudo",
+    "pkexec",
+    "doas",
+    "runas",
+    "权限提升",
+    "提权",
+    "privilege escalation",
+}
+
+
 def make_project(
     tmp_path: Path,
     *,
@@ -177,6 +189,10 @@ def test_registry_safe_domains_only_target_project_json_config() -> None:
             ]
         ).lower()
         assert not any(needle in action_text for needle in forbidden_needles)
+
+
+def test_privilege_escalation_aliases_are_forbidden() -> None:
+    assert REQUIRED_PRIVILEGE_ESCALATION_ALIASES <= set(FORBIDDEN_ACTIONS)
 
 
 def test_runtime_policy_matches_registry_and_defaults_to_dry_run(tmp_path: Path) -> None:

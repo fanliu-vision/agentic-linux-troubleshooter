@@ -1,0 +1,3 @@
+[startup] core runtime import failed during service boot
+ModuleNotFoundError: No module named 'core_service_runtime'
+[startup] this dependency is required for the service and must not be treated as optional

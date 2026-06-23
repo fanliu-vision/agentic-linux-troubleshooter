@@ -3,11 +3,14 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from policies.auto_recovery_policy import AutoRecoveryDecision, StrategyLayer
 from recovery.guarded_auto_recover_dry_run import (
+    FORBIDDEN_ACTIONS,
     evaluate_guarded_auto_recover_dry_run,
 )
 
@@ -150,6 +153,44 @@ def test_forbidden_action_is_blocked() -> None:
     assert result.strategy_layer == "disabled"
     assert result.downgrade_reason == "forbidden_action"
     assert not result.allowed_by_policy
+
+
+def test_privilege_escalation_aliases_are_registered() -> None:
+    assert {
+        "sudo",
+        "/usr/bin/sudo",
+        "pkexec",
+        "doas",
+        "runas",
+        "权限提升",
+        "提权",
+        "privilege escalation",
+    } <= set(FORBIDDEN_ACTIONS)
+
+
+@pytest.mark.parametrize(
+    "action_description",
+    [
+        "sudo systemctl restart demo.service",
+        "/usr/bin/sudo rm -rf /tmp/demo",
+        "pkexec systemctl stop demo.service",
+        "doas service demo restart",
+        "runas /user:Administrator demo.exe",
+        "尝试提权修改受保护配置",
+        "privilege escalation requested by fix plan",
+    ],
+)
+def test_privilege_escalation_aliases_are_blocked(action_description: str) -> None:
+    result = evaluate(
+        candidate_fix_id="fix-network-1",
+        action_description=action_description,
+    )
+
+    assert result.strategy_layer == "disabled"
+    assert result.downgrade_reason == "forbidden_action"
+    assert not result.allowed_by_policy
+    assert not result.would_execute
+    assert result.audit_record["forbidden_action"]
 
 
 def test_rollback_unavailable_blocks_candidate() -> None:

@@ -7,11 +7,25 @@
     "expected_action": "auto_recover_or_policy_checked"
   },
   {
+    "case_id": "network_port_connectivity_negative",
+    "log_file": "network_port_connectivity_negative.txt",
+    "expected_event_type": "network_connectivity",
+    "expected_issue_type": "network_connectivity",
+    "expected_action": "policy_escalation_only"
+  },
+  {
     "case_id": "gpu_oom_basic",
     "log_file": "gpu_oom_basic.log",
     "expected_event_type": "gpu_oom",
     "expected_issue_type": "gpu",
     "expected_action": "auto_recover_or_policy_checked"
+  },
+  {
+    "case_id": "gpu_oom_host_resource_negative",
+    "log_file": "gpu_oom_host_resource_negative.txt",
+    "expected_event_type": "host_resource",
+    "expected_issue_type": "host_resource",
+    "expected_action": "policy_escalation_only"
   },
   {
     "case_id": "cache_write_failed_basic",
@@ -21,6 +35,13 @@
     "expected_action": "policy_auto_recover"
   },
   {
+    "case_id": "cache_write_failed_disk_negative",
+    "log_file": "cache_write_failed_disk_negative.txt",
+    "expected_event_type": "disk_full",
+    "expected_issue_type": "disk",
+    "expected_action": "policy_escalation_only"
+  },
+  {
     "case_id": "optional_dependency_missing_basic",
     "log_file": "optional_dependency_missing_basic.txt",
     "expected_event_type": "optional_dependency_missing",
@@ -28,11 +49,25 @@
     "expected_action": "policy_auto_recover"
   },
   {
+    "case_id": "optional_dependency_missing_python_env_negative",
+    "log_file": "optional_dependency_missing_python_env_negative.txt",
+    "expected_event_type": "python_env",
+    "expected_issue_type": "python_env",
+    "expected_action": "policy_requires_explicit_allow"
+  },
+  {
     "case_id": "worker_overload_basic",
     "log_file": "worker_overload_basic.txt",
     "expected_event_type": "worker_overload",
     "expected_issue_type": "worker_overload",
     "expected_action": "policy_auto_recover"
+  },
+  {
+    "case_id": "worker_overload_process_crash_negative",
+    "log_file": "worker_overload_process_crash_negative.txt",
+    "expected_event_type": "process_crash",
+    "expected_issue_type": "process",
+    "expected_action": "policy_escalation_only"
   },
   {
     "case_id": "optional_integration_failed_basic",

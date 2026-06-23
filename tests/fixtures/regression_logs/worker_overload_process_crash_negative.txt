@@ -1,0 +1,3 @@
+[worker] batch processor terminated unexpectedly during startup
+Segmentation fault (core dumped)
+Main process exited with code 139

@@ -16,7 +16,14 @@ FORBIDDEN_ACTIONS = [
     "systemctl stop",
     "kubectl delete",
     "kubectl apply",
+    "/usr/bin/sudo",
+    "sudo",
+    "pkexec",
+    "doas",
+    "runas",
     "权限提升",
+    "提权",
+    "privilege escalation",
     "跨主机破坏性操作",
 ]
 

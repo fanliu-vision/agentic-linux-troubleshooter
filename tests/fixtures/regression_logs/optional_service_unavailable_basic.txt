@@ -1,0 +1,3 @@
+[service] optional enrichment service unavailable: timeout calling enrichment provider
+[fallback] degraded local enrichment rules are available for this request path
+[service] optional recommendation service can be disabled safely

@@ -86,6 +86,11 @@ def test_network_port_and_gpu_auto_recovery_remain_unchanged() -> None:
     ("event_type", "issue_type", "fix_id"),
     [
         ("cache_write_failed", "cache", "fix-cache-1"),
+        (
+            "optional_cache_backend_failed",
+            "optional_cache_backend",
+            "fix-cache-backend-1",
+        ),
         ("optional_dependency_missing", "optional_dependency", "fix-optional-dep-1"),
         (
             "optional_integration_failed",
@@ -93,9 +98,19 @@ def test_network_port_and_gpu_auto_recovery_remain_unchanged() -> None:
             "fix-optional-integration-1",
         ),
         (
+            "optional_service_unavailable",
+            "optional_service",
+            "fix-optional-service-1",
+        ),
+        (
             "notification_sink_failed",
             "notification_sink",
             "fix-notification-sink-1",
+        ),
+        (
+            "observability_export_failed",
+            "observability_export",
+            "fix-observability-export-1",
         ),
         ("queue_backpressure", "queue_backpressure", "fix-queue-backpressure-1"),
         ("worker_overload", "worker_overload", "fix-worker-1"),

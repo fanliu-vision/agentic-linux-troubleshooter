@@ -1,0 +1,3 @@
+[observability] observability exporter failed: OTEL collector returned HTTP 503
+[metrics] metrics exporter timeout for optional remote telemetry backend
+[fallback] write metrics to local file and trace summaries to console

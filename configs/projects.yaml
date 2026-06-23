@@ -32,9 +32,12 @@ projects:
         - fix-network-1
         - fix-gpu-1
         - fix-cache-1
+        - fix-cache-backend-1
         - fix-optional-dep-1
         - fix-optional-integration-1
+        - fix-optional-service-1
         - fix-notification-sink-1
+        - fix-observability-export-1
         - fix-queue-backpressure-1
         - fix-worker-1
       escalation_required:

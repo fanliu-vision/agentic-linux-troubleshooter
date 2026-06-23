@@ -7,6 +7,7 @@ from .semantics import (
     SEMANTIC_DISABLE_BOOL,
     SEMANTIC_LOWER_INT,
     SEMANTIC_PORT_AVAILABLE,
+    SEMANTIC_SAFE_ENUM_DOWNGRADE,
     SEMANTIC_SET_LITERAL,
 )
 
@@ -225,6 +226,114 @@ SAFE_RECOVERY_SPECS: tuple[SafeRecoverySpec, ...] = (
         ),
     ),
     SafeRecoverySpec(
+        event_type="optional_cache_backend_failed",
+        issue_type="optional_cache_backend",
+        fix_id="fix-cache-backend-1",
+        relative_config_path="config.json",
+        candidates=(
+            SafeRecoveryFieldCandidate(
+                "cache.backend",
+                "memory",
+                SEMANTIC_SAFE_ENUM_DOWNGRADE,
+            ),
+            SafeRecoveryFieldCandidate(
+                "cache.mode",
+                "memory",
+                SEMANTIC_SAFE_ENUM_DOWNGRADE,
+            ),
+            SafeRecoveryFieldCandidate(
+                "cache.redis_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "cache.write_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "feature_cache_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "simulate_optional_cache_backend_failed",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+        ),
+        low_risk_reason="only switches optional cache backend to memory or disables optional cache backend writes",
+        action_description="safe JSON config edit: degrade optional cache backend to memory/local mode",
+        local_success_message=(
+            "已尝试应用可选缓存后端降级修复：切换到 memory/local 或关闭可选缓存后端。"
+        ),
+        remote_success_message=(
+            "已远程应用可选缓存后端降级修复：切换到 memory/local 或关闭可选缓存后端。"
+        ),
+        remote_failure_message=(
+            "远程可选缓存后端降级修复失败：未找到受控缓存后端字段。"
+            "已检查 cache.backend、cache.mode、cache.redis_enabled、"
+            "cache.write_enabled、feature_cache_enabled、simulate_optional_cache_backend_failed。"
+        ),
+    ),
+    SafeRecoverySpec(
+        event_type="optional_service_unavailable",
+        issue_type="optional_service",
+        fix_id="fix-optional-service-1",
+        relative_config_path="config.json",
+        candidates=(
+            SafeRecoveryFieldCandidate(
+                "optional_services.enrichment.enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "optional_services.recommendation.enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "optional_services.risk_scoring.enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "enrichment_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "recommendation_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "external_risk_scoring_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "simulate_optional_service_unavailable",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+        ),
+        low_risk_reason="only disables optional enrichment/recommendation/risk-scoring services",
+        action_description="safe JSON config edit: disable unavailable optional service",
+        local_success_message=(
+            "已尝试应用可选服务降级修复：关闭不可用的 enrichment/recommendation/risk scoring。"
+        ),
+        remote_success_message=(
+            "已远程应用可选服务降级修复：关闭不可用的 enrichment/recommendation/risk scoring。"
+        ),
+        remote_failure_message=(
+            "远程可选服务降级修复失败：未找到受控可选服务开关字段。"
+            "已检查 optional_services.enrichment.enabled、optional_services.recommendation.enabled、"
+            "optional_services.risk_scoring.enabled、enrichment_enabled、recommendation_enabled、"
+            "external_risk_scoring_enabled、simulate_optional_service_unavailable。"
+        ),
+    ),
+    SafeRecoverySpec(
         event_type="notification_sink_failed",
         issue_type="notification_sink",
         fix_id="fix-notification-sink-1",
@@ -271,6 +380,64 @@ SAFE_RECOVERY_SPECS: tuple[SafeRecoverySpec, ...] = (
             "已检查 notification.webhook_enabled、notifications.webhook.enabled、"
             "notification.remote_sink_enabled、notification_sink.webhook_enabled、"
             "simulate_notification_sink_failed。"
+        ),
+    ),
+    SafeRecoverySpec(
+        event_type="observability_export_failed",
+        issue_type="observability_export",
+        fix_id="fix-observability-export-1",
+        relative_config_path="config.json",
+        candidates=(
+            SafeRecoveryFieldCandidate(
+                "observability.exporter_mode",
+                "local",
+                SEMANTIC_SAFE_ENUM_DOWNGRADE,
+            ),
+            SafeRecoveryFieldCandidate(
+                "observability.metrics_sink",
+                "file",
+                SEMANTIC_SAFE_ENUM_DOWNGRADE,
+            ),
+            SafeRecoveryFieldCandidate(
+                "observability.tracing_sink",
+                "console",
+                SEMANTIC_SAFE_ENUM_DOWNGRADE,
+            ),
+            SafeRecoveryFieldCandidate(
+                "observability.remote_exporter_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "metrics.remote_exporter_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "tracing.remote_exporter_enabled",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+            SafeRecoveryFieldCandidate(
+                "simulate_observability_export_failed",
+                False,
+                SEMANTIC_DISABLE_BOOL,
+            ),
+        ),
+        low_risk_reason="only disables optional remote observability exporters or switches them to local/file/console",
+        action_description="safe JSON config edit: degrade failed observability exporter to local/file/console",
+        local_success_message=(
+            "已尝试应用观测导出降级修复：关闭远程 exporter 或切换到 local/file/console。"
+        ),
+        remote_success_message=(
+            "已远程应用观测导出降级修复：关闭远程 exporter 或切换到 local/file/console。"
+        ),
+        remote_failure_message=(
+            "远程观测导出降级修复失败：未找到受控 exporter 字段。"
+            "已检查 observability.exporter_mode、observability.metrics_sink、"
+            "observability.tracing_sink、observability.remote_exporter_enabled、"
+            "metrics.remote_exporter_enabled、tracing.remote_exporter_enabled、"
+            "simulate_observability_export_failed。"
         ),
     ),
     SafeRecoverySpec(

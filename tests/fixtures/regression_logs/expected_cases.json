@@ -77,6 +77,62 @@
     "expected_action": "policy_escalation_only"
   },
   {
+    "case_id": "optional_cache_backend_failed_basic",
+    "log_file": "optional_cache_backend_failed_basic.txt",
+    "expected_event_type": "optional_cache_backend_failed",
+    "expected_issue_type": "optional_cache_backend",
+    "expected_action": "policy_auto_recover"
+  },
+  {
+    "case_id": "optional_cache_backend_disk_negative",
+    "log_file": "optional_cache_backend_disk_negative.txt",
+    "expected_event_type": "disk_full",
+    "expected_issue_type": "disk",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "optional_cache_backend_dependency_negative",
+    "log_file": "optional_cache_backend_dependency_negative.txt",
+    "expected_event_type": "dependency_service",
+    "expected_issue_type": "dependency_service",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "optional_service_unavailable_basic",
+    "log_file": "optional_service_unavailable_basic.txt",
+    "expected_event_type": "optional_service_unavailable",
+    "expected_issue_type": "optional_service",
+    "expected_action": "policy_auto_recover"
+  },
+  {
+    "case_id": "optional_service_dependency_negative",
+    "log_file": "optional_service_dependency_negative.txt",
+    "expected_event_type": "dependency_service",
+    "expected_issue_type": "dependency_service",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "observability_export_failed_basic",
+    "log_file": "observability_export_failed_basic.txt",
+    "expected_event_type": "observability_export_failed",
+    "expected_issue_type": "observability_export",
+    "expected_action": "policy_auto_recover"
+  },
+  {
+    "case_id": "observability_export_network_negative",
+    "log_file": "observability_export_network_negative.txt",
+    "expected_event_type": "network_connectivity",
+    "expected_issue_type": "network_connectivity",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "observability_export_auth_negative",
+    "log_file": "observability_export_auth_negative.txt",
+    "expected_event_type": "auth_cert",
+    "expected_issue_type": "auth_cert",
+    "expected_action": "policy_escalation_only"
+  },
+  {
     "case_id": "disk_full_basic",
     "log_file": "disk_full_basic_non_cache.txt",
     "expected_event_type": "disk_full",

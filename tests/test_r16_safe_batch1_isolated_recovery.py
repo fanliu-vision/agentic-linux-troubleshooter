@@ -18,7 +18,7 @@ from policies import RemediationPolicy
 from recovery.auto_recovery_runtime_gate import evaluate_runtime_auto_recovery_gate
 
 
-BATCH1_ISOLATED_CASES = [
+SAFE_DOMAIN_ISOLATED_CASES = [
     (
         "optional_integration_failed",
         "optional_integration",
@@ -43,6 +43,33 @@ BATCH1_ISOLATED_CASES = [
         "prefetch_count",
         2,
     ),
+    (
+        "optional_cache_backend_failed",
+        "optional_cache_backend",
+        "fix-cache-backend-1",
+        {"cache": {"backend": "redis"}, "untouched": "keep"},
+        "cache.backend",
+        "memory",
+    ),
+    (
+        "optional_service_unavailable",
+        "optional_service",
+        "fix-optional-service-1",
+        {
+            "optional_services": {"enrichment": {"enabled": True}},
+            "untouched": "keep",
+        },
+        "optional_services.enrichment.enabled",
+        False,
+    ),
+    (
+        "observability_export_failed",
+        "observability_export",
+        "fix-observability-export-1",
+        {"observability": {"exporter_mode": "otlp"}, "untouched": "keep"},
+        "observability.exporter_mode",
+        "local",
+    ),
 ]
 
 
@@ -61,8 +88,8 @@ def make_project(
         encoding="utf-8",
     )
     project = ProjectConfig(
-        project_id="r16_batch1_isolated",
-        name="R16 Batch1 Isolated",
+        project_id="r16_safe_isolated",
+        name="R16 Safe Isolated",
         mode="local",
         project_dir=str(project_dir),
         run_command="python app.py",
@@ -85,7 +112,7 @@ def make_event(event_type: str, issue_type: str) -> ErrorEvent:
         summary=f"{event_type} isolated evidence",
         source="isolated-test",
         raw_excerpt=f"{event_type} isolated raw evidence",
-        signature=f"r16-batch1-isolated-{event_type}",
+        signature=f"r16-safe-isolated-{event_type}",
     )
 
 
@@ -107,9 +134,9 @@ def evaluate(event: ErrorEvent, project: ProjectConfig):
         "field_path",
         "expected_value",
     ),
-    BATCH1_ISOLATED_CASES,
+    SAFE_DOMAIN_ISOLATED_CASES,
 )
-def test_batch1_default_dry_run_only_audits_without_json_write(
+def test_safe_domain_default_dry_run_only_audits_without_json_write(
     tmp_path: Path,
     event_type: str,
     issue_type: str,
@@ -149,9 +176,9 @@ def test_batch1_default_dry_run_only_audits_without_json_write(
         "field_path",
         "expected_value",
     ),
-    BATCH1_ISOLATED_CASES,
+    SAFE_DOMAIN_ISOLATED_CASES,
 )
-def test_batch1_live_mode_writes_only_json_with_backup_diff_and_rollback(
+def test_safe_domain_live_mode_writes_only_json_with_backup_diff_and_rollback(
     tmp_path: Path,
     event_type: str,
     issue_type: str,

@@ -1,0 +1,3 @@
+[cache] optional cache backend failed: redis cache backend timeout
+[cache] cache backend degraded; fallback to memory cache for feature lookups
+[fallback] continue with in-memory cache while optional cache backend is disabled

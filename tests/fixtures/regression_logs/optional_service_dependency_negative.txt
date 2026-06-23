@@ -1,0 +1,3 @@
+[service] optional recommendation service unavailable after database outage
+[postgresql] connection failed for primary catalog database
+[dependency] database connection pool exhausted; core dependency requires operator action

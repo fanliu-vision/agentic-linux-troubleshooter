@@ -1,0 +1,3 @@
+[observability] observability exporter failed after DNS resolution problem
+[network] temporary failure in name resolution for telemetry.example.internal
+[telemetry] remote endpoint cannot be resolved; investigate network connectivity

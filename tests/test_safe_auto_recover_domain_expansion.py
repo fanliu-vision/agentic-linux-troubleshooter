@@ -85,6 +85,36 @@ ModuleNotFoundError: No module named 'acme_internal_sdk'
 [queue] consumer lag too high; lower prefetch and inflight limits before retry
 """,
     ),
+    (
+        "optional_cache_backend_failed",
+        "optional_cache_backend",
+        "fix-cache-backend-1",
+        """
+[cache] optional cache backend failed: redis cache backend timeout
+[cache] cache backend degraded; fallback to memory cache for feature lookups
+[fallback] continue with in-memory cache while optional cache backend is disabled
+""",
+    ),
+    (
+        "optional_service_unavailable",
+        "optional_service",
+        "fix-optional-service-1",
+        """
+[service] optional enrichment service unavailable: timeout calling enrichment provider
+[fallback] degraded local enrichment rules are available for this request path
+[service] optional recommendation service can be disabled safely
+""",
+    ),
+    (
+        "observability_export_failed",
+        "observability_export",
+        "fix-observability-export-1",
+        """
+[observability] observability exporter failed: OTEL collector returned HTTP 503
+[metrics] metrics exporter timeout for optional remote telemetry backend
+[fallback] write metrics to local file and trace summaries to console
+""",
+    ),
 ]
 
 FIXTURE_DIR = PROJECT_ROOT / "tests" / "fixtures" / "regression_logs"
@@ -106,7 +136,10 @@ def make_project(
                     "simulate_disk_full": True,
                     "simulate_python_env_mismatch": True,
                     "optional_webhook_enabled": True,
+                    "cache": {"backend": "redis"},
                     "notification": {"webhook_enabled": True},
+                    "optional_services": {"enrichment": {"enabled": True}},
+                    "observability": {"exporter_mode": "otlp"},
                     "prefetch_count": 64,
                     "worker_concurrency": 8,
                 }
@@ -171,6 +204,12 @@ def test_detector_classifies_new_safe_domains_before_generic_domains(
         assert "auth_cert" not in event_types
     if event_type == "queue_backpressure":
         assert "worker_overload" not in event_types
+    if event_type == "optional_cache_backend_failed":
+        assert "cache_write_failed" not in event_types
+    if event_type == "optional_service_unavailable":
+        assert "network_connectivity" not in event_types
+    if event_type == "observability_export_failed":
+        assert "network_connectivity" not in event_types
 
 
 @pytest.mark.parametrize(
@@ -199,6 +238,30 @@ def test_detector_classifies_new_safe_domains_before_generic_domains(
 """,
             "queue_backpressure",
             "worker_overload",
+        ),
+        (
+            """
+[cache] optional cache backend degraded
+[fallback] continue with in-memory cache
+""",
+            "optional_cache_backend_failed",
+            "cache_write_failed",
+        ),
+        (
+            """
+[service] optional service timeout for enrichment provider
+[fallback] degraded local enrichment is active
+""",
+            "optional_service_unavailable",
+            "network_connectivity",
+        ),
+        (
+            """
+[observability] observability exporter timeout
+[fallback] local file metrics are available
+""",
+            "observability_export_failed",
+            "network_connectivity",
         ),
     ],
 )
@@ -231,6 +294,31 @@ def test_new_safe_domains_suppress_neighboring_generic_domains(
             "queue_backpressure_dependency_service_negative.txt",
             "dependency_service",
             "queue_backpressure",
+        ),
+        (
+            "optional_cache_backend_disk_negative.txt",
+            "disk_full",
+            "optional_cache_backend_failed",
+        ),
+        (
+            "optional_cache_backend_dependency_negative.txt",
+            "dependency_service",
+            "optional_cache_backend_failed",
+        ),
+        (
+            "optional_service_dependency_negative.txt",
+            "dependency_service",
+            "optional_service_unavailable",
+        ),
+        (
+            "observability_export_network_negative.txt",
+            "network_connectivity",
+            "observability_export_failed",
+        ),
+        (
+            "observability_export_auth_negative.txt",
+            "auth_cert",
+            "observability_export_failed",
         ),
     ],
 )
@@ -394,6 +482,24 @@ def test_policy_dry_run_and_guarded_audit_cover_new_domains() -> None:
             {"prefetch_count": 64},
             "prefetch_count",
             2,
+        ),
+        (
+            "fix-cache-backend-1",
+            {"cache": {"backend": "redis"}},
+            "cache.backend",
+            "memory",
+        ),
+        (
+            "fix-optional-service-1",
+            {"optional_services": {"enrichment": {"enabled": True}}},
+            "optional_services.enrichment.enabled",
+            False,
+        ),
+        (
+            "fix-observability-export-1",
+            {"observability": {"exporter_mode": "otlp"}},
+            "observability.exporter_mode",
+            "local",
         ),
         ("fix-worker-1", {"worker_concurrency": 8}, "worker_concurrency", 2),
     ],

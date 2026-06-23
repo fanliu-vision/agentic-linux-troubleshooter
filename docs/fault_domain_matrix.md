@@ -24,7 +24,10 @@ policy 是 detection 与 action 之间的安全边界。detection 只生成 even
 | `optional_dependency_missing` | optional dependency missing、internal risk SDK unavailable、fallback local rule engine | `optional_dependency_missing_basic.txt` | 项目允许时 `auto_recover` | `fix-optional-dep-1` | 是，仅限显式允许 | 默认否 | 只关闭可选依赖集成；不安装 package，不代表核心 `python_env` 故障。 |
 | `worker_overload` | worker overload、worker pool exhausted、concurrency too high | `worker_overload_basic.txt` | 项目允许时 `auto_recover` | `fix-worker-1` | 是，仅限显式允许 | 默认否 | 只降低配置化 worker 并发；不 kill 进程、不 restart 服务，不代表主机级 `host_resource`。 |
 | `optional_integration_failed` | optional integration failed、enrichment client timeout、fallback local enrichment rules | `optional_integration_failed_basic.txt` | 项目允许时 `auto_recover` | `fix-optional-integration-1` | 是，仅限显式允许 | 默认否 | 只关闭可选外部集成；不安装 SDK，不改 token，不调用外部 API。 |
+| `optional_cache_backend_failed` | optional cache backend failed、redis cache backend timeout、fallback memory/local cache | `optional_cache_backend_failed_basic.txt` | 项目允许时 `auto_recover` | `fix-cache-backend-1` | 是，仅限显式允许 | 默认否 | 只关闭可选缓存后端或切到 memory/local；不清缓存、不 flush Redis，不代表核心 Redis 依赖故障。 |
+| `optional_service_unavailable` | optional enrichment/recommendation/risk scoring service unavailable、fallback local/degraded | `optional_service_unavailable_basic.txt` | 项目允许时 `auto_recover` | `fix-optional-service-1` | 是，仅限显式允许 | 默认否 | 只关闭可选服务开关；不修改核心 DB/MQ/Redis/Kafka 依赖。 |
 | `notification_sink_failed` | notification sink failed、notification webhook HTTP 5xx/timeout、fallback console/file | `notification_sink_failed_basic.txt` | 项目允许时 `auto_recover` | `fix-notification-sink-1` | 是，仅限显式允许 | 默认否 | 只关闭可选远程通知 sink；不改 webhook token、密钥或证书。 |
+| `observability_export_failed` | observability/metrics/tracing exporter failed、fallback local/file/console | `observability_export_failed_basic.txt` | 项目允许时 `auto_recover` | `fix-observability-export-1` | 是，仅限显式允许 | 默认否 | 只关闭可选远程 exporter 或切到 local/file/console；不改 token、证书或网络配置。 |
 | `queue_backpressure` | queue backpressure、prefetch too high、max inflight exhausted、consumer lag too high | `queue_backpressure_basic.txt` | 项目允许时 `auto_recover` | `fix-queue-backpressure-1` | 是，仅限显式允许 | 默认否 | 只下调配置化队列消费参数；不 purge 队列、不 ack/nack 消息、不重启 broker。 |
 | `disk_full` | `No space left on device`、`Errno 28`、disk quota exceeded、inode exhausted | `disk_full_basic.log` | `manual_escalation` | `<none>` | 否 | 是 | 不自动执行 `rm` 或破坏性清理。 |
 | `python_env` | `ModuleNotFoundError`、`ImportError`、missing module、pip/interpreter mismatch | `python_env_basic.log` | 默认 `manual_escalation`，显式允许时才可考虑受控 fix | `fix-python-1` 候选 | 仅限项目显式允许 | 默认是 | 不执行任意 `pip install`。 |
@@ -59,7 +62,10 @@ policy 是 detection 与 action 之间的安全边界。detection 只生成 even
 - `optional_dependency_missing` 可在允许时通过 `fix-optional-dep-1` 自动恢复，只关闭可选集成；
 - `worker_overload` 可在允许时通过 `fix-worker-1` 自动恢复，只降低配置化并发；
 - `optional_integration_failed` 可在允许时通过 `fix-optional-integration-1` 自动恢复，只关闭可选外部集成；
+- `optional_cache_backend_failed` 可在允许时通过 `fix-cache-backend-1` 自动恢复，只切换可选缓存到 memory/local 或关闭可选缓存后端；
+- `optional_service_unavailable` 可在允许时通过 `fix-optional-service-1` 自动恢复，只关闭可选 enrichment/recommendation/risk scoring；
 - `notification_sink_failed` 可在允许时通过 `fix-notification-sink-1` 自动恢复，只关闭可选远程通知 sink；
+- `observability_export_failed` 可在允许时通过 `fix-observability-export-1` 自动恢复，只关闭远程 exporter 或切到 local/file/console；
 - `queue_backpressure` 可在允许时通过 `fix-queue-backpressure-1` 自动恢复，只下调配置化队列消费参数；
 - `python_env` 有 `fix-python-1` 候选，但默认测试要求显式允许，且不能执行任意 package install；
 - 高风险企业故障域默认走 `manual_escalation`。
@@ -91,7 +97,10 @@ Agent 不会自动执行：
 - 缓存上下文中的 `No space left on device` 或 `Errno 28` 归入 `cache_write_failed`；
 - 带 fallback 证据的可选依赖缺失归入 `optional_dependency_missing`；
 - 可选外部集成失败并存在本地降级路径时归入 `optional_integration_failed`；
+- 可选缓存后端失败并存在 memory/local cache 降级路径时归入 `optional_cache_backend_failed`；
+- 可选 enrichment/recommendation/risk scoring 服务不可用且存在 local/degraded fallback 时归入 `optional_service_unavailable`；
 - 通知 webhook/sink HTTP 5xx 或 timeout 且 console/file 可用时归入 `notification_sink_failed`；
+- 可选 metrics/tracing/observability exporter 失败且 file/console/local 可用时归入 `observability_export_failed`；
 - 配置化 worker 并发过高归入 `worker_overload`；
 - 队列 prefetch、max inflight 或 consumer lag 过高归入 `queue_backpressure`；
 - `ModuleNotFoundError` 归入 `python_env`；

@@ -1,0 +1,3 @@
+[cache] optional cache backend failed after core Redis outage
+[redis] redis connection refused for primary session store
+[dependency] redis is a required dependency service for this deployment

@@ -109,6 +109,17 @@ class ErrorEventDetector:
             ],
         ),
         ErrorRule(
+            event_type="optional_cache_backend_failed",
+            issue_type="optional_cache_backend",
+            severity="medium",
+            summary="可选缓存后端不可用，可降级到 memory/local cache",
+            patterns=[
+                r"optional cache backend.*(?:failed|unavailable|timeout|degraded)",
+                r"redis cache backend.*(?:failed|unavailable|timeout|degraded)",
+                r"cache backend.*(?:fallback|degraded).*(?:memory|local)",
+            ],
+        ),
+        ErrorRule(
             event_type="disk_full",
             issue_type="disk",
             severity="high",
@@ -177,6 +188,19 @@ class ErrorEventDetector:
             ],
         ),
         ErrorRule(
+            event_type="optional_service_unavailable",
+            issue_type="optional_service",
+            severity="medium",
+            summary="可选 enrichment/recommendation/risk scoring 服务不可用，可降级本地模式",
+            patterns=[
+                r"optional service.*(?:failed|unavailable|timeout|degraded)",
+                r"optional enrichment service.*(?:failed|unavailable|timeout|degraded)",
+                r"recommendation service.*(?:optional|degraded|fallback|unavailable|timeout)",
+                r"risk scoring service.*(?:optional|degraded|fallback|unavailable|timeout)",
+                r"fallback.*(?:local|degraded).*(?:enrichment|recommendation|risk scoring)",
+            ],
+        ),
+        ErrorRule(
             event_type="python_env",
             issue_type="python_env",
             severity="medium",
@@ -201,6 +225,19 @@ class ErrorEventDetector:
                 r"max[_ -]?inflight.*(?:exhausted|too high|limit)",
                 r"consumer lag.*too high",
                 r"queue consumer.*(?:lag|backpressure|overloaded)",
+            ],
+        ),
+        ErrorRule(
+            event_type="observability_export_failed",
+            issue_type="observability_export",
+            severity="medium",
+            summary="可选 metrics/tracing/exporter 导出失败，可降级本地 file/console",
+            patterns=[
+                r"observability exporter.*(?:failed|unavailable|timeout|degraded)",
+                r"(?:metrics|tracing) exporter.*(?:failed|unavailable|timeout|degraded)",
+                r"otel exporter.*(?:failed|unavailable|timeout|degraded)",
+                r"telemetry export.*(?:failed|unavailable|timeout|degraded)",
+                r"fallback.*(?:file|console|local).*(?:metrics|tracing|observability|telemetry)",
             ],
         ),
         ErrorRule(
@@ -494,17 +531,32 @@ class ErrorEventDetector:
 
     def _suppress_generic_events(self, events: list[ErrorEvent]) -> list[ErrorEvent]:
         specialized_to_generic = {
+            "optional_cache_backend_failed": {"cache_write_failed"},
             "cache_write_failed": {"disk_full"},
             "optional_dependency_missing": {"python_env"},
             "optional_integration_failed": {"optional_dependency_missing"},
             "notification_sink_failed": {"network_connectivity"},
+            "optional_service_unavailable": {"network_connectivity"},
+            "observability_export_failed": {"network_connectivity"},
             "queue_backpressure": {"worker_overload"},
             "worker_overload": {"host_resource"},
         }
         manual_to_safe = {
+            "disk_full": {"optional_cache_backend_failed"},
             "python_env": {"optional_integration_failed"},
-            "auth_cert": {"notification_sink_failed"},
-            "dependency_service": {"queue_backpressure"},
+            "auth_cert": {
+                "notification_sink_failed",
+                "observability_export_failed",
+            },
+            "dependency_service": {
+                "optional_cache_backend_failed",
+                "optional_service_unavailable",
+                "queue_backpressure",
+            },
+            "network_connectivity": {
+                "observability_export_failed",
+                "optional_service_unavailable",
+            },
         }
         specialized_events = [
             event for event in events if event.event_type in specialized_to_generic
@@ -527,6 +579,14 @@ class ErrorEventDetector:
                     break
 
             if suppress:
+                continue
+
+            if event.event_type in manual_to_safe and any(
+                safe_event.event_type in manual_to_safe[event.event_type]
+                and self._events_are_same_scope(event, safe_event)
+                for safe_event in specialized_events
+            ):
+                result.append(event)
                 continue
 
             for specialized in specialized_events:

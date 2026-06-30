@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -178,9 +179,13 @@ def evaluate_runtime_auto_recovery_gate(
         )
     )
 
-    dry_run = bool(policy_decision.dry_run)
     auto_recover_allowed = bool(policy_decision.auto_recover_allowed)
     has_actionable_edit = _has_actionable_planned_edit(precheck_result)
+    operator_required = bool(
+        policy_decision.operator_required
+        or _precheck_requires_operator_review(precheck_result)
+    )
+    dry_run = bool(policy_decision.dry_run)
     allowed_to_execute = (
         auto_recover_allowed
         and not dry_run
@@ -189,7 +194,7 @@ def evaluate_runtime_auto_recovery_gate(
         and precheck_result.get("no_op") is not True
         and cooldown_result.get("allowed") is True
         and rollback_available
-        and not policy_decision.operator_required
+        and not operator_required
     )
 
     if auto_recover_allowed and dry_run and not downgrade_reason:
@@ -197,6 +202,12 @@ def evaluate_runtime_auto_recovery_gate(
 
     would_execute = bool(allowed_to_execute)
     strategy_layer = _as_value(policy_decision.strategy_layer)
+    if (
+        operator_required
+        and strategy_layer == StrategyLayer.SAFE_AUTO_RECOVER.value
+        and "ambiguous_event_evidence" in (precheck_result.get("reasons") or [])
+    ):
+        strategy_layer = StrategyLayer.MANUAL_ESCALATION.value
     if not auto_recover_allowed and strategy_layer == StrategyLayer.SAFE_AUTO_RECOVER.value:
         strategy_layer = StrategyLayer.MANUAL_ESCALATION.value
 
@@ -210,7 +221,7 @@ def evaluate_runtime_auto_recovery_gate(
         would_execute=would_execute,
         allowed_to_execute=allowed_to_execute,
         auto_recover_allowed=auto_recover_allowed,
-        operator_required=bool(policy_decision.operator_required),
+        operator_required=operator_required,
         audit_required=bool(policy_decision.audit_required),
         downgrade_reason=downgrade_reason,
         precheck_result=precheck_result,
@@ -304,6 +315,13 @@ def _run_precheck(
     if not (event.raw_excerpt or event.summary or event.matched_keywords):
         reasons.append("insufficient_evidence")
 
+    ambiguity_result = _safe_recovery_ambiguity_result(
+        event=event,
+        selected_fix_id=selected_fix_id,
+    )
+    if ambiguity_result["ambiguous"]:
+        reasons.insert(0, "ambiguous_event_evidence")
+
     if not project.policy.rollback_on_failure:
         reasons.append("rollback_disabled")
 
@@ -317,6 +335,7 @@ def _run_precheck(
             "evidence_present": bool(
                 event.raw_excerpt or event.summary or event.matched_keywords
             ),
+            "evidence_domain_check": ambiguity_result,
         }
     )
     return precheck
@@ -359,13 +378,20 @@ def _first_failed_gate_reason(
 def _build_audit_record(result: RuntimeAutoRecoveryGateResult) -> dict[str, Any]:
     execution_result = (
         "not_run_r15_no_op"
-        if result.precheck_result.get("no_op") is True
+        if (
+            result.precheck_result.get("no_op") is True
+            and not _result_has_gate_blocking_failure(result)
+        )
         else (
             "would_run_r15_live"
             if result.would_execute
             else (
                 "not_run_r15_dry_run"
-                if result.dry_run and result.auto_recover_allowed
+                if (
+                    result.dry_run
+                    and result.auto_recover_allowed
+                    and not _result_has_gate_blocking_failure(result)
+                )
                 else "not_run_r15_gate_blocked"
             )
         )
@@ -473,6 +499,205 @@ def _has_actionable_planned_edit(precheck_result: dict[str, Any]) -> bool:
         return int(precheck_result.get("actionable_edit_count", 0)) > 0
     except (TypeError, ValueError):
         return False
+
+
+def _precheck_requires_operator_review(precheck_result: dict[str, Any]) -> bool:
+    reasons = set(precheck_result.get("reasons") or [])
+    return "ambiguous_event_evidence" in reasons
+
+
+def _result_has_gate_blocking_failure(result: RuntimeAutoRecoveryGateResult) -> bool:
+    if result.operator_required:
+        return True
+
+    if result.precheck_result.get("passed") is not True:
+        return True
+
+    if result.downgrade_reason and result.downgrade_reason not in {
+        "r15_dry_run",
+        "no_op_already_safe",
+    }:
+        return True
+
+    return False
+
+
+def _safe_recovery_ambiguity_result(
+    *,
+    event: ErrorEvent,
+    selected_fix_id: str,
+) -> dict[str, Any]:
+    text = _event_evidence_text(event)
+    result: dict[str, Any] = {
+        "ambiguous": False,
+        "reason": "",
+        "selected_fix_id": selected_fix_id,
+        "selected_event_type": event.event_type,
+        "conflicting_domains": [],
+        "matched_domains": {},
+        "policy": "allow_safe_auto_recovery_when_evidence_domain_is_single",
+    }
+
+    if not selected_fix_id or not text:
+        return result
+
+    matched_domains = {
+        "worker_overload": _matching_pattern_labels(text, WORKER_OVERLOAD_MARKERS),
+        "queue_backpressure": _matching_pattern_labels(text, QUEUE_BACKPRESSURE_MARKERS),
+        "python_env": _matching_pattern_labels(text, PYTHON_ENV_MARKERS),
+        "optional_dependency": _matching_pattern_labels(text, OPTIONAL_DEPENDENCY_MARKERS),
+        "optional_integration": _matching_pattern_labels(text, OPTIONAL_INTEGRATION_MARKERS),
+        "cache_write": _matching_pattern_labels(text, CACHE_WRITE_MARKERS),
+        "disk_full": _matching_pattern_labels(text, DISK_FULL_MARKERS),
+        "dependency_service": _matching_pattern_labels(text, DEPENDENCY_SERVICE_MARKERS),
+    }
+    result["matched_domains"] = {
+        key: value for key, value in matched_domains.items() if value
+    }
+
+    if selected_fix_id in {"fix-worker-1", "fix-queue-backpressure-1"}:
+        if matched_domains["worker_overload"] and matched_domains["queue_backpressure"]:
+            return _mark_ambiguous(
+                result,
+                reason="worker_queue_domain_overlap",
+                domains=["worker_overload", "queue_backpressure"],
+            )
+
+    if selected_fix_id == "fix-queue-backpressure-1":
+        if matched_domains["queue_backpressure"] and matched_domains["dependency_service"]:
+            return _mark_ambiguous(
+                result,
+                reason="queue_dependency_service_overlap",
+                domains=["queue_backpressure", "dependency_service"],
+            )
+
+    if selected_fix_id == "fix-optional-dep-1":
+        if matched_domains["python_env"] and not matched_domains["optional_dependency"]:
+            return _mark_ambiguous(
+                result,
+                reason="python_env_without_optional_dependency_context",
+                domains=["python_env", "optional_dependency"],
+            )
+
+    if selected_fix_id == "fix-optional-integration-1":
+        if matched_domains["python_env"] and not matched_domains["optional_integration"]:
+            return _mark_ambiguous(
+                result,
+                reason="python_env_without_optional_integration_context",
+                domains=["python_env", "optional_integration"],
+            )
+
+    if selected_fix_id == "fix-cache-1":
+        if matched_domains["disk_full"] and not matched_domains["cache_write"]:
+            return _mark_ambiguous(
+                result,
+                reason="disk_full_without_cache_write_context",
+                domains=["disk_full", "cache_write"],
+            )
+
+    return result
+
+
+def _event_evidence_text(event: ErrorEvent) -> str:
+    return "\n".join(
+        item
+        for item in [
+            getattr(event, "raw_excerpt", ""),
+            getattr(event, "summary", ""),
+            getattr(event, "signature", ""),
+            " ".join(getattr(event, "matched_keywords", []) or []),
+        ]
+        if item
+    ).lower()
+
+
+def _matching_pattern_labels(
+    text: str,
+    patterns: dict[str, str],
+) -> list[str]:
+    return [
+        label
+        for label, pattern in patterns.items()
+        if re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
+    ]
+
+
+def _mark_ambiguous(
+    result: dict[str, Any],
+    *,
+    reason: str,
+    domains: list[str],
+) -> dict[str, Any]:
+    result["ambiguous"] = True
+    result["reason"] = reason
+    result["conflicting_domains"] = domains
+    result["policy"] = "manual_review_required_for_cross_domain_evidence"
+    return result
+
+
+WORKER_OVERLOAD_MARKERS = {
+    "worker_overload": r"\bworker\b.*\boverload\b",
+    "worker_pool_exhausted": r"\bworker\s+pool\s+exhausted\b",
+    "too_many_workers": r"\btoo\s+many\s+workers\b",
+    "worker_concurrency_high": r"\bworker[_ -]?concurrency\b.*\btoo\s+high\b",
+    "worker_concurrency_exhausted": r"\bworker[_ -]?concurrency\b.*\bexhausted\b",
+    "concurrency_too_high": r"\bconcurrency\b.*\btoo\s+high\b",
+}
+
+QUEUE_BACKPRESSURE_MARKERS = {
+    "queue_backpressure": r"\bqueue\s+backpressure\b",
+    "prefetch_too_high": r"\bprefetch(?:[_ -]?count)?\b.*\btoo\s+high\b",
+    "max_inflight": r"\bmax[_ -]?inflight\b",
+    "consumer_lag": r"\bconsumer\s+lag\b",
+    "queue_consumer_backpressure": r"\bqueue\s+consumer\b.*\b(?:lag|backpressure|overloaded)\b",
+}
+
+PYTHON_ENV_MARKERS = {
+    "module_not_found": r"\bmodulenotfounderror\b",
+    "no_module_named": r"\bno\s+module\s+named\b",
+    "import_error": r"\bimporterror\b",
+    "interpreter_pip_mismatch": r"\bpython interpreter and pip path do not belong\b",
+    "distribution_not_found": r"\bpkg_resources\.distributionnotfound\b",
+}
+
+OPTIONAL_DEPENDENCY_MARKERS = {
+    "optional_dependency": r"\boptional\s+(?:dependency|plugin)\b",
+    "missing_optional_dependency": r"\b(?:missing|unavailable)\s+optional\s+(?:dependency|plugin)\b",
+    "internal_risk_sdk_unavailable": r"\binternal\s+risk\s+sdk\s+unavailable\b",
+    "acme_internal_sdk": r"\bacme_internal_sdk\b",
+    "local_rule_engine_fallback": r"\bfallback\b.*\blocal\s+rule\s+engine\b",
+    "optional_dependency_fallback": r"\boptional\s+dependency\s+fallback\b",
+}
+
+OPTIONAL_INTEGRATION_MARKERS = {
+    "optional_integration": r"\boptional\s+integration\b",
+    "optional_webhook": r"\boptional\s+webhook\b",
+    "risk_sdk_integration": r"\brisk\s+sdk\s+integration\b",
+    "enrichment_client": r"\benrichment\s+client\b",
+    "local_enrichment_fallback": r"\bfallback\b.*\blocal\s+enrichment\b",
+}
+
+CACHE_WRITE_MARKERS = {
+    "cache_write": r"\bcache\b.*\b(?:write|persist|flush)\b",
+    "write_cache": r"\b(?:failed|unable)\s+to\s+write\s+cache\b",
+    "feature_cache": r"\bfeature\s+cache\b",
+    "memory_cache_fallback": r"\bfallback\b.*\bin-memory\s+feature\s+cache\b",
+}
+
+DISK_FULL_MARKERS = {
+    "no_space_left": r"\bno\s+space\s+left\s+on\s+device\b",
+    "errno_28": r"\berrno\s*28\b",
+    "disk_quota": r"\bdisk\s+quota\s+exceeded\b",
+    "inode_exhausted": r"\binode\b.*\b(?:full|exhausted|no\s+space)\b",
+}
+
+DEPENDENCY_SERVICE_MARKERS = {
+    "database_connection": r"\b(?:mysql|postgresql|postgres|database)\b.*\bconnection\b",
+    "redis_connection": r"\bredis\b.*\bconnection\s+refused\b",
+    "kafka_broker": r"\bkafka\b.*\bbroker\s+unavailable\b",
+    "rabbitmq_connection": r"\brabbitmq\b.*\bconnection\s+timeout\b",
+    "mq_connection": r"\bmq\b.*\bconnection\s+timeout\b",
+}
 
 
 def _normalize_text(value: str) -> str:

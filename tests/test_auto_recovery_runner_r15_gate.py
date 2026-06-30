@@ -122,6 +122,7 @@ def make_project(
                 "simulate_disk_full": True,
                 "simulate_python_env_mismatch": True,
                 "worker_concurrency": 8,
+                "prefetch_count": 64,
             }
         ),
         encoding="utf-8",
@@ -156,6 +157,18 @@ def make_event(event_type: str, issue_type: str) -> ErrorEvent:
     )
 
 
+def make_raw_event(event_type: str, issue_type: str, raw_excerpt: str) -> ErrorEvent:
+    return ErrorEvent(
+        event_type=event_type,
+        issue_type=issue_type,
+        severity="high",
+        summary=f"{event_type} summary",
+        source="test",
+        raw_excerpt=raw_excerpt,
+        signature=f"runner-r15-{event_type}-raw",
+    )
+
+
 def make_runner(project: ProjectConfig, session: FakeSession) -> AutoRecoveryRunner:
     runner = AutoRecoveryRunner(project=project, session=session)  # type: ignore[arg-type]
     runner._generate_report = (  # type: ignore[method-assign]
@@ -179,6 +192,39 @@ def test_r15_dry_run_gate_does_not_call_apply_or_rerun() -> None:
     assert "not_run_r15_dry_run" in session.recorded_result
     assert "R15 forced recovery audit fields" in session.recorded_result
     assert "r15_execution_result" in session.recorded_result
+
+
+def test_cross_domain_gate_block_stays_manual_even_in_dry_run() -> None:
+    session = FakeSession()
+    runner = make_runner(
+        make_project(
+            dry_run=True,
+            allow_auto_apply=["fix-queue-backpressure-1"],
+        ),
+        session,
+    )
+    event = make_raw_event(
+        "queue_backpressure",
+        "queue_backpressure",
+        """
+[worker] worker overload caused by queue backpressure
+[worker] worker pool exhausted; concurrency too high
+""",
+    )
+
+    assert runner.is_auto_recover_candidate(event) is False
+
+    result = runner.recover(event)
+    audit = result.recovery_audit_record()
+
+    assert result.r15_gate is not None
+    assert result.r15_gate.downgrade_reason == "ambiguous_event_evidence"
+    assert result.r15_gate.operator_required is True
+    assert result.decision.action == "manual_escalation"
+    assert audit["execution_result"] == "not_run_r15_gate_blocked"
+    assert audit["operator_required"] is True
+    assert session.apply_calls == []
+    assert session.rerun_calls == 0
 
 
 def test_r15_live_gate_calls_existing_apply_path_when_explicitly_enabled() -> None:

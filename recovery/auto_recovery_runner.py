@@ -167,7 +167,11 @@ class AutoRecoveryResult:
 
     def _execution_result(self) -> str:
         if self.r15_gate is not None and not self.r15_gate.allowed_to_execute:
-            if self.r15_gate.dry_run and self.r15_gate.auto_recover_allowed:
+            if (
+                self.r15_gate.dry_run
+                and self.r15_gate.auto_recover_allowed
+                and not self._gate_blocked_before_dry_run(self.r15_gate)
+            ):
                 return "not_run_r15_dry_run"
             return "not_run_r15_gate_blocked"
 
@@ -184,6 +188,22 @@ class AutoRecoveryResult:
             return "executed_rerun_failed"
 
         return "executed_unresolved"
+
+    @staticmethod
+    def _gate_blocked_before_dry_run(gate: RuntimeAutoRecoveryGateResult) -> bool:
+        if gate.operator_required:
+            return True
+
+        if gate.precheck_result.get("passed") is not True:
+            return True
+
+        if gate.downgrade_reason and gate.downgrade_reason not in {
+            "r15_dry_run",
+            "no_op_already_safe",
+        }:
+            return True
+
+        return False
 
     def _rollback_result(self) -> str:
         if self.rollback_executed:
@@ -345,6 +365,9 @@ class AutoRecoveryRunner:
                 project_id=self.project.project_id,
             ),
         )
+        if "ambiguous_event_evidence" in (gate.precheck_result.get("reasons") or []):
+            return False
+
         return gate.is_candidate
 
     def recover(self, event: ErrorEvent) -> AutoRecoveryResult:
@@ -475,7 +498,7 @@ class AutoRecoveryRunner:
         gate: RuntimeAutoRecoveryGateResult,
     ) -> RemediationDecision:
         action = "manual_escalation" if gate.operator_required else "report_only"
-        if gate.dry_run and gate.auto_recover_allowed:
+        if gate.dry_run and gate.auto_recover_allowed and not gate.operator_required:
             action = "report_only"
 
         return RemediationDecision(

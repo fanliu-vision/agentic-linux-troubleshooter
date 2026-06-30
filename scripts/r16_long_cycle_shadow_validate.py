@@ -27,7 +27,8 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     cycle_summaries: list[dict[str, Any]] = []
-    for cycle_index in range(1, args.cycles + 1):
+    last_cycle = args.start_cycle + args.cycles - 1
+    for cycle_index in range(args.start_cycle, last_cycle + 1):
         cycle_dir = output_dir / f"cycle_{cycle_index:03d}"
         cycle_dir.mkdir(parents=True, exist_ok=True)
         started_at = now_text()
@@ -53,9 +54,10 @@ def main() -> int:
         )
         cycle_summaries.append(cycle_summary)
         write_cycle_summary(cycle_dir, cycle_summary)
+        write_cycle_summary_json(cycle_dir, cycle_summary)
         print_cycle_summary(cycle_summary)
 
-        if cycle_index < args.cycles and args.interval_seconds > 0:
+        if cycle_index < last_cycle and args.interval_seconds > 0:
             time.sleep(args.interval_seconds)
 
     aggregate = build_aggregate_summary(
@@ -79,10 +81,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--cycles", type=int, default=6)
     parser.add_argument("--interval-seconds", type=int, default=300)
+    parser.add_argument("--start-cycle", type=int, default=1)
     parser.add_argument("--output-dir", default="")
     args = parser.parse_args()
     if args.cycles < 1:
         parser.error("--cycles must be >= 1")
+    if args.start_cycle < 1:
+        parser.error("--start-cycle must be >= 1")
     if args.interval_seconds < 0:
         parser.error("--interval-seconds must be >= 0")
     return args
@@ -295,6 +300,12 @@ def write_cycle_summary(cycle_dir: Path, cycle_summary: dict[str, Any]) -> Path:
         f"- summary_path: `{cycle_summary.get('summary_path', '<none>')}`",
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def write_cycle_summary_json(cycle_dir: Path, cycle_summary: dict[str, Any]) -> Path:
+    path = cycle_dir / "cycle_summary.json"
+    path.write_text(json.dumps(cycle_summary, indent=2), encoding="utf-8")
     return path
 
 

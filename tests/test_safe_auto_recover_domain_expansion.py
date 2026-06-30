@@ -233,14 +233,6 @@ def test_detector_classifies_new_safe_domains_before_generic_domains(
         ),
         (
             """
-[worker] worker overload caused by queue backpressure
-[queue] prefetch too high for local consumer
-""",
-            "queue_backpressure",
-            "worker_overload",
-        ),
-        (
-            """
 [cache] optional cache backend degraded
 [fallback] continue with in-memory cache
 """,
@@ -275,6 +267,104 @@ def test_new_safe_domains_suppress_neighboring_generic_domains(
 
     assert expected_event_type in event_types
     assert suppressed_event_type not in event_types
+
+
+def test_worker_queue_overlap_exposes_both_domains_before_runtime_gate() -> None:
+    text = """
+[worker] worker overload caused by queue backpressure
+[queue] prefetch too high for local consumer
+"""
+
+    events = ErrorEventDetector().detect_all(text, source="enterprise.log")
+    event_types = {event.event_type for event in events}
+
+    assert "worker_overload" in event_types
+    assert "queue_backpressure" in event_types
+
+
+def test_optional_dependency_with_explicit_fallback_does_not_become_python_env() -> None:
+    text = """
+[env] optional dependency internal_risk_sdk missing
+ModuleNotFoundError: No module named 'acme_internal_sdk'
+[fallback] internal risk SDK unavailable, continue with local rule engine.
+"""
+
+    events = ErrorEventDetector().detect_all(text, source="enterprise.log")
+    event_types = {event.event_type for event in events}
+
+    assert "optional_dependency_missing" in event_types
+    assert "python_env" not in event_types
+
+
+def test_runtime_gate_blocks_worker_queue_cross_domain_auto_recovery() -> None:
+    text = """
+[worker] worker overload caused by queue backpressure
+[worker] worker pool exhausted; concurrency too high
+"""
+    detector = ErrorEventDetector()
+    events = detector.detect_all(text, source="enterprise.log")
+    queue_event = next(
+        event for event in events if event.event_type == "queue_backpressure"
+    )
+    project = make_project(dry_run=False, allow_auto_apply=["fix-queue-backpressure-1"])
+    decision = RemediationPolicy().decide(queue_event, project)
+
+    gate = evaluate_runtime_auto_recovery_gate(
+        event=queue_event,
+        project=project,
+        remediation_decision=decision,
+    )
+
+    assert decision.action == "auto_recover"
+    assert gate.allowed_to_execute is False
+    assert gate.would_execute is False
+    assert gate.operator_required is True
+    assert gate.strategy_layer == "manual_escalation"
+    assert gate.downgrade_reason == "ambiguous_event_evidence"
+    assert gate.audit_record["execution_result"] == "not_run_r15_gate_blocked"
+    assert gate.precheck_result["evidence_domain_check"]["ambiguous"] is True
+    assert (
+        gate.precheck_result["evidence_domain_check"]["reason"]
+        == "worker_queue_domain_overlap"
+    )
+
+
+def test_runtime_gate_reports_ambiguity_before_no_op_for_cross_domain_evidence() -> None:
+    text = """
+[worker] worker overload caused by queue backpressure
+[queue] prefetch_count=2 already safe
+"""
+    event = ErrorEvent(
+        event_type="queue_backpressure",
+        issue_type="queue_backpressure",
+        severity="medium",
+        summary="queue backpressure summary",
+        source="enterprise.log",
+        raw_excerpt=text,
+        signature="mixed-worker-queue-no-op",
+    )
+    project_dir = Path(tempfile.mkdtemp(prefix="safe-expansion-no-op-"))
+    (project_dir / "config.json").write_text(
+        json.dumps({"prefetch_count": 2}),
+        encoding="utf-8",
+    )
+    project = make_project(
+        dry_run=False,
+        allow_auto_apply=["fix-queue-backpressure-1"],
+        project_dir=str(project_dir),
+    )
+    decision = RemediationPolicy().decide(event, project)
+
+    gate = evaluate_runtime_auto_recovery_gate(
+        event=event,
+        project=project,
+        remediation_decision=decision,
+    )
+
+    assert gate.precheck_result["no_op"] is True
+    assert gate.allowed_to_execute is False
+    assert gate.downgrade_reason == "ambiguous_event_evidence"
+    assert gate.audit_record["execution_result"] == "not_run_r15_gate_blocked"
 
 
 @pytest.mark.parametrize(

@@ -4,6 +4,8 @@
 
 R16-S2 validates the existing 11 safe recovery domains over repeated offline shadow cycles. It does not add safe domains, expand `auto_recover` permission, inject runtime logs, run live smoke, or execute recovery.
 
+This stage can run without a real Linux project. The default validation mode is an offline simulated shadow run over the repository's regression fixtures and generated sample configs. It validates policy/gate/precheck/forbidden/no-op/rollback metadata stability, not production log representativeness.
+
 The long-cycle script is:
 
 ```bash
@@ -19,6 +21,15 @@ The script reuses `scripts/r16_safe_recovery_shadow_validate.py` for each cycle 
 - `cycle_XXX/R16_SAFE_RECOVERY_DOMAIN_VALIDATION_SUMMARY.md`
 - `R16_S2_LONG_CYCLE_SHADOW_PILOT_SUMMARY.md`
 - `long_cycle_shadow_summary.json`
+
+If a run is interrupted, the aggregate summary can be rebuilt from completed cycle directories:
+
+```bash
+.venv/bin/python scripts/r16_summarize_long_cycle_shadow.py \
+  --output-dir "$PILOT_DIR" \
+  --requested-cycles 288 \
+  --interval-seconds 900
+```
 
 ## 2. Pilot Result
 
@@ -52,26 +63,94 @@ The pilot used a short interval to validate framework behavior inside a local de
 Recommended 3-day run:
 
 ```bash
-PILOT_DIR="acceptance_artifacts/r16_s2_shadow_3d_$(date +%Y%m%d_%H%M%S)"
+cd /home/lf/projects/agentic-linux-troubleshooter
 
-.venv/bin/python scripts/r16_long_cycle_shadow_validate.py \
+RUN_DIR="acceptance_artifacts/r16_s2_shadow_3d_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$RUN_DIR"
+
+nohup .venv/bin/python scripts/r16_long_cycle_shadow_validate.py \
   --cycles 288 \
   --interval-seconds 900 \
-  --output-dir "$PILOT_DIR"
+  --output-dir "$RUN_DIR" \
+  > "$RUN_DIR/run.log" 2>&1 &
+
+echo "$!" > "$RUN_DIR/run.pid"
+echo "$RUN_DIR"
 ```
 
 Recommended 7-day run:
 
 ```bash
-PILOT_DIR="acceptance_artifacts/r16_s2_shadow_7d_$(date +%Y%m%d_%H%M%S)"
+cd /home/lf/projects/agentic-linux-troubleshooter
 
-.venv/bin/python scripts/r16_long_cycle_shadow_validate.py \
+RUN_DIR="acceptance_artifacts/r16_s2_shadow_7d_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$RUN_DIR"
+
+nohup .venv/bin/python scripts/r16_long_cycle_shadow_validate.py \
   --cycles 672 \
   --interval-seconds 900 \
-  --output-dir "$PILOT_DIR"
+  --output-dir "$RUN_DIR" \
+  > "$RUN_DIR/run.log" 2>&1 &
+
+echo "$!" > "$RUN_DIR/run.pid"
+echo "$RUN_DIR"
 ```
 
 Both commands are shadow-only. They write acceptance artifacts under the requested directory and do not touch real `state/` or `outputs/`.
+
+### Check Progress
+
+```bash
+tail -f "$RUN_DIR/run.log"
+```
+
+```bash
+find "$RUN_DIR" -maxdepth 1 -type d -name 'cycle_*' | sort | wc -l
+```
+
+### Rebuild Summary After Completion Or Interruption
+
+```bash
+.venv/bin/python scripts/r16_summarize_long_cycle_shadow.py \
+  --output-dir "$RUN_DIR" \
+  --requested-cycles 288 \
+  --interval-seconds 900
+```
+
+For a 7-day run, use `--requested-cycles 672`.
+
+### Resume An Interrupted 3-Day Run
+
+Count completed cycles:
+
+```bash
+DONE=$(find "$RUN_DIR" -maxdepth 1 -type d -name 'cycle_*' | wc -l)
+NEXT=$((DONE + 1))
+LEFT=$((288 - DONE))
+echo "DONE=$DONE NEXT=$NEXT LEFT=$LEFT"
+```
+
+Resume from the next cycle:
+
+```bash
+nohup .venv/bin/python scripts/r16_long_cycle_shadow_validate.py \
+  --start-cycle "$NEXT" \
+  --cycles "$LEFT" \
+  --interval-seconds 900 \
+  --output-dir "$RUN_DIR" \
+  >> "$RUN_DIR/run.log" 2>&1 &
+
+echo "$!" > "$RUN_DIR/run.pid"
+```
+
+After resume finishes, rebuild the aggregate summary:
+
+```bash
+.venv/bin/python scripts/r16_summarize_long_cycle_shadow.py \
+  --output-dir "$RUN_DIR" \
+  --requested-cycles 288 \
+  --interval-seconds 900
+```
 
 ## 4. Observability Metrics
 
@@ -133,3 +212,5 @@ R16-S2 remains dry-run / shadow only:
 ## 7. Recommendation
 
 The short pilot completed with `PASS`, so the project is ready to enter the formal 3-7 day shadow validation window.
+
+For the current environment without a real Linux project, use the 3-day simulated fixture shadow run first. Later, when a real project and real logs exist, add a separate real-log shadow phase; do not mix that with this R16-S2 simulated soak.

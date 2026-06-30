@@ -538,7 +538,6 @@ class ErrorEventDetector:
             "notification_sink_failed": {"network_connectivity"},
             "optional_service_unavailable": {"network_connectivity"},
             "observability_export_failed": {"network_connectivity"},
-            "queue_backpressure": {"worker_overload"},
             "worker_overload": {"host_resource"},
         }
         manual_to_safe = {

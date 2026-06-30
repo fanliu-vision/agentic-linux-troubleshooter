@@ -1,0 +1,84 @@
+{
+  "schema_version": "r17.real_log_shadow.fixture.v1",
+  "description": "Production-like labeled logs for R17 read-only shadow evaluation.",
+  "cases": [
+    {
+      "case_id": "prod_like_benign_heartbeat",
+      "log_file": "prod_like_benign_heartbeat.log",
+      "source_kind": "production_like_benign",
+      "expected_event_types": []
+    },
+    {
+      "case_id": "prod_like_benign_long_batch",
+      "log_file": "prod_like_benign_long_batch.log",
+      "source_kind": "production_like_benign_long",
+      "expected_event_types": []
+    },
+    {
+      "case_id": "prod_like_cache_write_safe",
+      "log_file": "prod_like_cache_write_safe.log",
+      "source_kind": "production_like_safe",
+      "expected_event_types": ["cache_write_failed"]
+    },
+    {
+      "case_id": "prod_like_optional_dependency_safe",
+      "log_file": "prod_like_optional_dependency_safe.log",
+      "source_kind": "production_like_safe",
+      "expected_event_types": ["optional_dependency_missing"]
+    },
+    {
+      "case_id": "prod_like_persistent_disk_manual",
+      "log_file": "prod_like_persistent_disk_manual.log",
+      "source_kind": "production_like_manual",
+      "expected_event_types": ["disk_full"]
+    },
+    {
+      "case_id": "prod_like_core_python_manual",
+      "log_file": "prod_like_core_python_manual.log",
+      "source_kind": "production_like_manual",
+      "expected_event_types": ["python_env"]
+    },
+    {
+      "case_id": "prod_like_queue_dependency_manual",
+      "log_file": "prod_like_queue_dependency_manual.log",
+      "source_kind": "production_like_manual_negative",
+      "expected_event_types": ["dependency_service"]
+    },
+    {
+      "case_id": "prod_like_notification_auth_manual",
+      "log_file": "prod_like_notification_auth_manual.log",
+      "source_kind": "production_like_manual_negative",
+      "expected_event_types": ["auth_cert"]
+    },
+    {
+      "case_id": "prod_like_observability_network_manual",
+      "log_file": "prod_like_observability_network_manual.log",
+      "source_kind": "production_like_manual_negative",
+      "expected_event_types": ["network_connectivity"]
+    },
+    {
+      "case_id": "prod_like_worker_queue_cross_domain",
+      "log_file": "prod_like_worker_queue_cross_domain.log",
+      "source_kind": "production_like_cross_domain",
+      "expected_event_types": ["queue_backpressure", "worker_overload"]
+    },
+    {
+      "case_id": "prod_like_cache_disk_mixed_window",
+      "log_file": "prod_like_cache_disk_mixed_window.log",
+      "source_kind": "production_like_safe_manual_mixed",
+      "expected_event_types": ["cache_write_failed", "disk_full"]
+    },
+    {
+      "case_id": "prod_like_optional_python_mixed_window",
+      "log_file": "prod_like_optional_python_mixed_window.log",
+      "source_kind": "production_like_safe_manual_mixed",
+      "expected_event_types": ["optional_dependency_missing", "python_env"]
+    },
+    {
+      "case_id": "prod_like_queue_dependency_mixed_window",
+      "log_file": "prod_like_queue_dependency_mixed_window.log",
+      "source_kind": "production_like_safe_manual_mixed",
+      "expected_event_types": ["dependency_service", "queue_backpressure"]
+    }
+  ]
+}

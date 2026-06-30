@@ -46,7 +46,10 @@ systemd 长期守护
 - `multi-event-per-window`：同一日志窗口可识别并处理多个 event。
 - 多事件独立 report/alert：每个 event 拥有独立 evidence、fingerprint、报告和通知。
 - remote log tail 保留尾部修复，避免长 tail 输出截断掉最新故障行。
-- 自动恢复安全边界：危险操作默认不自动执行。
+- R15 runtime gate：自动恢复执行前强制经过 dry-run、precheck、cooldown、rollback 和 audit 检查。
+- R16 safe recovery registry：当前统一管理 11 个低风险 `safe_auto_recover` 故障域。
+- 语义化安全预检查：仅允许项目内 JSON 配置字段的安全降级，例如关闭可选能力、切换本地/内存模式或下调参数。
+- 自动恢复安全边界：危险操作默认不自动执行，生产配置默认仍建议保持 `auto_recovery_dry_run: true`。
 - 核心测试基线：`scripts/run_core_tests.sh`。
 
 ## 架构概览
@@ -66,32 +69,55 @@ systemd 长期守护
 
 ## 3. 支持的故障域
 
-| event_type | 典型现象 | 默认处置方向 |
-|---|---|---|
-| `network_port` | `Address already in use`、端口冲突、服务绑定失败 | 可在 policy 允许时自动恢复 |
-| `gpu_oom` | `CUDA out of memory`、`HIP out of memory`、显存不足 | 可在 policy 允许时自动恢复 |
-| `disk_full` | `No space left on device`、inode 或缓存目录耗尽 | 高风险，默认人工升级 |
-| `python_env` | `ModuleNotFoundError`、解释器与 pip 环境不一致 | 通常人工确认或报告 |
-| `slurm` | 作业 pending、资源不足、`oom-kill`、节点异常 | 通常人工确认或报告 |
-| `process_kill` | 进程被 kill、被 OOM killer 终止 | 高风险，默认人工升级 |
-| `permission_denied` | 权限不足、路径不可写、认证失败 | 高风险，默认人工升级 |
-| `process_crash` | `core-dump`、`SIGSEGV`、非零退出 | 高风险，默认人工升级 |
-| `host_resource` | 主机内存、CPU、磁盘、inode 等资源异常 | 通常人工确认或报告 |
-| `network_connectivity` | DNS、连接超时、服务不可达 | 通常人工确认或报告 |
-| `dependency_service` | Redis、DB、对象存储、外部依赖不可用 | 通常人工确认或报告 |
-| `config_error` | 配置缺失、字段错误、格式错误 | 通常人工确认或报告 |
-| `auth_cert` | token、证书、权限、密钥相关异常 | 高风险，默认人工升级 |
-| `container_k8s` | `BackOff`、`ImagePullBackOff`、`OOMKilled`、Pod 异常 | 高风险，默认人工升级 |
+### 3.1 safe_auto_recover 候选域
 
-只有安全允许并显式配置的故障域会进入自动恢复。高风险故障默认走 `manual_escalation`，由负责人确认后处理。
+以下故障域已进入 R16 `safe_recovery.registry`。它们只是自动恢复候选；真实执行还必须同时满足项目 `policy.allow_auto_apply`、`auto_recovery_dry_run=false`、R15 runtime gate、语义 precheck、cooldown、rollback 和 audit 要求。
+
+| event_type | 典型现象 | fix_id | 安全动作边界 |
+|---|---|---|---|
+| `network_port` | `Address already in use`、端口冲突、服务绑定失败 | `fix-network-1` | 只修改受控 JSON 端口字段，并检查目标端口可用 |
+| `gpu_oom` | `CUDA out of memory`、`HIP out of memory`、显存不足 | `fix-gpu-1` | 只下调明确的 batch size 类 JSON 字段 |
+| `cache_write_failed` | 缓存写入失败、cache `Errno 28`、fallback 到 memory cache | `fix-cache-1` | 只关闭可选缓存写入或缓存故障模拟开关 |
+| `optional_dependency_missing` | 可选依赖、插件或 internal SDK 缺失，并存在 fallback | `fix-optional-dep-1` | 只关闭可选依赖或可选集成开关，不执行 `pip install` |
+| `optional_integration_failed` | 可选 webhook、risk SDK、enrichment client 失败，并存在本地降级 | `fix-optional-integration-1` | 只关闭失败的可选外部集成，不改 token 或外部服务 |
+| `optional_cache_backend_failed` | 可选 Redis/cache backend 失败，并可切换 memory/local cache | `fix-cache-backend-1` | 只切换到 memory/local 或关闭可选缓存后端，不清理缓存、不 flush Redis |
+| `optional_service_unavailable` | 可选 enrichment、recommendation、risk scoring 服务不可用 | `fix-optional-service-1` | 只关闭可选服务开关，不修改核心 DB/MQ/Redis/Kafka |
+| `notification_sink_failed` | 可选 webhook/notification sink 超时、HTTP 5xx，并可保留 file/console | `fix-notification-sink-1` | 只关闭可选远程通知 sink，不修改密钥、证书或 token |
+| `observability_export_failed` | metrics/tracing/OTel exporter 失败，并可 fallback file/console/local | `fix-observability-export-1` | 只关闭远程 exporter 或切到 local/file/console |
+| `queue_backpressure` | queue backpressure、prefetch 过高、max inflight exhausted | `fix-queue-backpressure-1` | 只下调配置化 queue consumer 参数，不 purge 队列、不 ack/nack |
+| `worker_overload` | worker pool exhausted、concurrency too high、worker overload | `fix-worker-1` | 只下调配置化 worker 并发，不 kill/restart 进程 |
+
+当前示例项目 `enterprise_demo_local` 已把这些 `fix_id` 放入 `policy.allow_auto_apply`，但配置仍保持 `auto_recovery_dry_run: true`。因此默认行为是生成审计和报告，不做真实 apply。
+
+### 3.2 manual_escalation / report_only 域
+
+以下故障域默认不允许自动恢复。Agent 会生成报告、通知负责人或进入人工升级路径。
+
+| event_type | 典型现象 | 默认处置方向 | 禁止的自动动作 |
+|---|---|---|---|
+| `disk_full` | `No space left on device`、inode 或缓存目录耗尽 | `manual_escalation` | 不自动 `rm`、不清目录、不压缩或删除文件 |
+| `python_env` | `ModuleNotFoundError`、解释器与 pip 环境不一致 | `manual_escalation` | 不执行任意 `pip install`，即使存在 `fix-python-1` 候选也默认受 R15 gate 阻断 |
+| `slurm` | 作业 pending、资源不足、`oom-kill`、节点异常 | `manual_escalation` | 不 `scancel`、不改调度器状态、不重提作业 |
+| `process_kill` | 进程被 kill、exit 137、SIGKILL | `manual_escalation` | 不 kill/restart 进程 |
+| `permission_denied` | 权限不足、路径不可写、EACCES | `manual_escalation` | 不 `chmod`、不 `chown`、不提权 |
+| `process_crash` | `core-dump`、`SIGSEGV`、非零退出 | `manual_escalation` | 不自动 `systemctl restart` 或替换进程 |
+| `host_resource` | 主机内存、CPU、文件句柄、系统负载异常 | `manual_escalation` | 不修改系统资源限制、不杀进程 |
+| `network_connectivity` | DNS、连接超时、连接拒绝、TLS handshake timeout | `manual_escalation` | 不改网络、DNS、iptables 或证书 |
+| `dependency_service` | DB、Redis、Kafka、RabbitMQ、MQ、连接池异常 | `manual_escalation` | 不重启外部依赖、不改核心依赖地址 |
+| `config_error` | 配置缺失、字段错误、格式错误、非法 path/port | `manual_escalation` | 不猜测核心业务默认值 |
+| `auth_cert` | token、证书、HTTP 401/403、TLS 校验失败 | `manual_escalation` | 不修改 token、secret、certificate、ACL |
+| `container_k8s` | `CrashLoopBackOff`、`ImagePullBackOff`、`OOMKilled`、Pod 调度失败 | `manual_escalation` | 不执行 `kubectl delete/apply/rollout restart` |
+| `traceback` / `unknown` | 泛化异常或证据不足 | `report_only` 或 `manual_escalation` | 不执行恢复动作 |
+
+只有安全允许、显式配置、语义 precheck 通过且 R15 runtime gate 放行的故障域才可能进入真实自动恢复。高风险故障默认走 `manual_escalation`，由负责人确认后处理。
 
 ## 4. 自动恢复安全边界
 
-自动恢复由 policy 严格控制，不会默认执行危险操作。
+自动恢复由 policy、safe recovery registry 和 R15 runtime gate 共同控制，不会默认执行危险操作。
 
 安全边界包括：
 
-- `kill`、`rm`、`pip install`、`systemctl`、`kubectl` 等操作必须受 policy 限制，并需要人工确认。
+- `kill`、`rm`、`pip install`、`systemctl`、`kubectl`、`scancel`、`chmod`、`chown`、提权等操作默认禁止自动执行。
 - 每轮最多处理 3 个 event。
 - 每轮最多执行 1 个 `auto_recover`。
 - 高风险域默认走 `manual_escalation`。
@@ -99,7 +125,18 @@ systemd 长期守护
 - 报告中不得把 `manual_escalation` 描述成已自动修复。
 - Agent 不应声称执行了上下文中没有发生的操作。
 
-当前自动恢复重点覆盖低风险、可回滚、可验证的配置类修复，例如端口调整、训练 batch size 调整等。缓存清理、进程终止、服务重启、集群变更和依赖安装默认不自动执行。
+R15 runtime gate 执行前必须确认：
+
+- 项目启用 `auto_recover` 且 `fix_id` 出现在 `policy.allow_auto_apply`。
+- `auto_recovery_dry_run=false`；默认示例配置仍保持 `true`。
+- event_type 属于 `safe_recovery.registry` 中登记的 safe 候选。
+- precheck 能读到目标配置，并找到可执行的 planned edit。
+- planned edit 满足语义规则：`disable_bool`、`lower_int`、`port_available` 或 `safe_enum_downgrade`。
+- rollback plan 可用，并能记录 backup / diff / applied record。
+- cooldown、rate limit、forbidden action 和 operator confirmation 检查通过。
+- audit record 已写入报告、alert 或 cycle summary。
+
+当前自动恢复重点覆盖低风险、可回滚、可验证的项目内 JSON 配置降级。缓存清理、进程终止、服务重启、依赖安装、集群变更、认证密钥修改和外部依赖重启默认不自动执行。
 
 ## 5. 报告能力
 
@@ -187,9 +224,15 @@ scripts/run_core_tests.sh
 .venv/bin/python -m pytest tests/test_multi_event_detector.py -q
 .venv/bin/python -m pytest tests/test_stage6e_monitor_loop_multi_event.py -q
 .venv/bin/python -m pytest tests/test_remote_log_tail_truncation.py -q
+.venv/bin/python -m pytest tests/test_auto_recovery_runtime_gate.py -q
+.venv/bin/python -m pytest tests/test_auto_recovery_runner_r15_gate.py -q
+.venv/bin/python -m pytest tests/test_safe_recovery_registry.py -q
+.venv/bin/python -m pytest tests/test_safe_recovery_registry_governance.py -q
+.venv/bin/python -m pytest tests/test_safe_recovery_semantic_precheck.py -q
+.venv/bin/python -m pytest tests/test_safe_auto_recover_domain_expansion.py -q
 ```
 
-这些测试覆盖核心模块导入、故障域回归、multi-event detector、MonitorLoop 多事件处理和 remote tail 截断修复。
+这些测试覆盖核心模块导入、故障域回归、multi-event detector、MonitorLoop 多事件处理、remote tail 截断修复、R15 runtime gate、R16 safe recovery registry、语义 precheck 和 safe 域扩展。
 
 ## 8. 当前验收状态
 
@@ -199,6 +242,11 @@ scripts/run_core_tests.sh
 - R10 remote log tail 截断问题已修复，日志 tail 场景保留尾部故障行。
 - R11 报告模板质量审计与小幅优化完成。
 - R12 GitHub 版本基线已建立，`main` 分支和 `stage6e-r11-stable` tag 已推送到远程仓库。
+- R15 自动恢复策略分层完成：policy schema、validator / resolver、dry-run、guarded dry-run、runtime gate、precheck、cooldown、rollback audit 和 failure-path validation 均已接入。
+- R16 safe recovery registry 完成：safe 候选统一由 `safe_recovery.registry` 管理，local / remote executor、runtime policy、precheck 和 governance 测试从 registry 派生。
+- R16 safe_auto_recover 域已扩展到 11 个低风险配置降级域，包括 optional integration、cache backend、notification sink、observability exporter、queue backpressure 和 worker overload 等。
+- R16-S2 3-day long-cycle shadow validation 已完成 288/288 个周期，结论 `PASS`；期间 `remote_apply_fix_called=False`、`rerun_remote_project_called=False`、`exception_count=0`。
+- R16-S2 是 fixture / generated config shadow validation，用于验证策略、gate、precheck、forbidden、no-op 和 rollback metadata 稳定性；它不等同于真实生产日志代表性验证。
 
 ## 9. 项目定位
 

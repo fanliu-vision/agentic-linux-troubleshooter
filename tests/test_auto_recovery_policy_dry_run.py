@@ -135,7 +135,7 @@ def test_network_port_allowed_fix_returns_safe_auto_recover_candidate() -> None:
     assert decision.selected_fix_id == "fix-network-1"
 
 
-def test_network_port_unknown_fix_downgrades() -> None:
+def test_network_port_unknown_fix_ignored() -> None:
     result = run_policy_dry_run(load_example_policy(), sample_events())
     decision = decisions_by_fingerprint(result)["fp-network-unknown"]
 
@@ -198,8 +198,8 @@ def test_summary_counts_strategy_layers() -> None:
     assert result.summary["auto_recover_allowed_count"] == 2
     assert result.summary["dry_run_auto_recover_count"] == 2
     assert result.summary["by_strategy_layer"]["safe_auto_recover"] == 2
-    assert result.summary["by_strategy_layer"]["manual_escalation"] == 5
-    assert result.summary["by_strategy_layer"]["diagnose_only"] == 1
+    assert result.summary["by_strategy_layer"]["manual_escalation"] == 3
+    assert result.summary["by_strategy_layer"]["diagnose_only"] == 3
     assert result.summary["by_strategy_layer"]["disabled"] == 1
 
 

@@ -9,6 +9,7 @@ __all__ = [
     "MonitorRunResult",
     "LocalLogWatcher",
     "RemoteLogWatcher",
+    "RemoteLogWatermarkStore",
     "WatchedLogChunk",
 ]
 
@@ -34,12 +35,23 @@ def __getattr__(name: str) -> Any:
         globals().update(exports)
         return exports[name]
 
-    if name in {"LocalLogWatcher", "RemoteLogWatcher", "WatchedLogChunk"}:
-        from .log_watcher import LocalLogWatcher, RemoteLogWatcher, WatchedLogChunk
+    if name in {
+        "LocalLogWatcher",
+        "RemoteLogWatcher",
+        "RemoteLogWatermarkStore",
+        "WatchedLogChunk",
+    }:
+        from .log_watcher import (
+            LocalLogWatcher,
+            RemoteLogWatcher,
+            RemoteLogWatermarkStore,
+            WatchedLogChunk,
+        )
 
         exports = {
             "LocalLogWatcher": LocalLogWatcher,
             "RemoteLogWatcher": RemoteLogWatcher,
+            "RemoteLogWatermarkStore": RemoteLogWatermarkStore,
             "WatchedLogChunk": WatchedLogChunk,
         }
         globals().update(exports)

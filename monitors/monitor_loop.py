@@ -5,9 +5,14 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from detectors import ErrorEventDetector, ErrorEvent
-from monitors.log_watcher import LocalLogWatcher, RemoteLogWatcher
+from monitors.log_watcher import (
+    LocalLogWatcher,
+    RemoteLogWatcher,
+    RemoteLogWatermarkStore,
+)
 from monitors.project_registry import ProjectConfig
 from sessions import TroubleshootingSession
 from recovery import AutoRecoveryRunner
@@ -28,10 +33,12 @@ class MonitorRunResult:
 
 class MonitorLoop:
     """
-    Stage 6A monitor loop.
+    Stage 6 monitor and auto-recovery loop.
 
-    It monitors local or remote logs, detects error events and triggers diagnosis.
-    It does not perform auto recovery yet.
+    It polls local or remote logs, detects error events, runs diagnosis/reporting,
+    and delegates recovery decisions to AutoRecoveryRunner. Only safe_auto_recover
+    candidates may execute recovery after project policy, runtime gate, precheck,
+    cooldown, rollback, and audit checks; high-risk events remain manual/report-only.
     """
 
     MAX_EVENTS_PER_CYCLE = 3
@@ -59,17 +66,6 @@ class MonitorLoop:
         self.seen_fingerprints: set[str] = set()
         self.reports_generated: list[str] = []
 
-        self.session = self._build_session()
-        self.watcher = self._build_watcher()
-        self.rate_limit_tracker = RateLimitTracker()
-        self.recovery_runner = AutoRecoveryRunner(
-            project=self.project,
-            session=self.session,
-        )
-        self.notification_manager = NotificationManager(
-            project=self.project,
-            rate_limit_tracker=self.rate_limit_tracker,
-        )
         self.state_dir = state_dir
         self.heartbeat_interval = heartbeat_interval
         self.health_check_interval = health_check_interval
@@ -89,6 +85,18 @@ class MonitorLoop:
             self.project_state = ProjectMonitorState(project_id=self.project.project_id)
 
         self.project_state.mode = self.project.mode
+
+        self.session = self._build_session()
+        self.watcher = self._build_watcher()
+        self.rate_limit_tracker = RateLimitTracker()
+        self.recovery_runner = AutoRecoveryRunner(
+            project=self.project,
+            session=self.session,
+        )
+        self.notification_manager = NotificationManager(
+            project=self.project,
+            rate_limit_tracker=self.rate_limit_tracker,
+        )
 
         if daemon_log_path is None:
             daemon_log_path = str(
@@ -110,6 +118,9 @@ class MonitorLoop:
         self._current_cycle_last_error = ""
         self._current_cycle_last_exception_type = ""
         self._current_cycle_llm_fallback_used = False
+        self._current_remote_log_metrics = self._empty_remote_log_metrics()
+        self._remote_log_notice_last_ts: dict[str, float] = {}
+        self._remote_log_notice_interval_seconds = 300
 
         self.daemon_logger.info(
             f"MonitorLoop initialized: project_id={self.project.project_id}, "
@@ -353,6 +364,7 @@ class MonitorLoop:
         self._current_cycle_last_error = ""
         self._current_cycle_last_exception_type = ""
         self._current_cycle_llm_fallback_used = False
+        self._current_remote_log_metrics = self._empty_remote_log_metrics()
 
         runtime_health = dict(self.project_state.runtime_health or {})
         runtime_health.update(
@@ -441,12 +453,70 @@ class MonitorLoop:
                 "rate_limited_alerts": len(
                     self.rate_limit_tracker.cycle.suppressed_alerts
                 ),
+                **self._current_remote_log_metrics,
             }
         )
         self.project_state.runtime_health = runtime_health
 
         if self.enable_persistent_state:
             self.state_store.save(self.project_state)
+
+    @staticmethod
+    def _empty_remote_log_metrics() -> dict[str, Any]:
+        return {
+            "remote_log_strategy_counts": {},
+            "remote_log_fallback_count": 0,
+            "remote_log_bytes_read": 0,
+            "remote_log_watermark_errors": [],
+        }
+
+    def _capture_remote_log_observability(self) -> None:
+        metrics = self._empty_remote_log_metrics()
+        watcher_metrics = getattr(self.watcher, "last_poll_metrics", None)
+
+        if isinstance(watcher_metrics, dict):
+            strategy_counts = watcher_metrics.get("remote_log_strategy_counts") or {}
+            if isinstance(strategy_counts, dict):
+                metrics["remote_log_strategy_counts"] = dict(strategy_counts)
+
+            metrics["remote_log_fallback_count"] = int(
+                watcher_metrics.get("remote_log_fallback_count") or 0
+            )
+            metrics["remote_log_bytes_read"] = int(
+                watcher_metrics.get("remote_log_bytes_read") or 0
+            )
+
+            errors = watcher_metrics.get("remote_log_watermark_errors") or []
+            if isinstance(errors, list):
+                metrics["remote_log_watermark_errors"] = list(errors)
+
+        self._current_remote_log_metrics = metrics
+
+    def _log_remote_log_notices(self) -> None:
+        notices = getattr(self.watcher, "last_poll_notices", None)
+        if not isinstance(notices, list):
+            return
+
+        now = self._now_ts()
+        for notice in notices:
+            if not isinstance(notice, dict):
+                continue
+
+            kind = str(notice.get("kind", "remote_log_notice"))
+            path = str(notice.get("path", ""))
+            reason = str(notice.get("reason", ""))
+            strategy = str(notice.get("strategy", ""))
+            key = f"{kind}:{path}:{reason}:{strategy}"
+            last_ts = self._remote_log_notice_last_ts.get(key, 0.0)
+            if now - last_ts < self._remote_log_notice_interval_seconds:
+                continue
+
+            self._remote_log_notice_last_ts[key] = now
+            message = (
+                "remote log watermark notice: "
+                f"kind={kind}, path={path}, reason={reason}, strategy={strategy}"
+            )
+            self.daemon_logger.warning(message)
 
 
     def _handle_event(self, event: ErrorEvent) -> CycleEventRecord | None:
@@ -475,9 +545,9 @@ class MonitorLoop:
         print("[Diagnosis] route updated:")
         print(self.session.initial_diagnosis_summary())
 
-        # Stage 6C:
         # 只要进入监控事件，就统一进入 AutoRecoveryRunner。
-        # 是否自动修复，由 RemediationPolicy 根据 projects.yaml 决定。
+        # 最终是否执行由 registry domain policy、project policy overlay
+        # 和 runtime gate 共同裁决。
         recovery_result = self.recovery_runner.recover(event)
         self._record_llm_fallback_from_messages(recovery_result.messages)
         self._append_report_paths(recovery_result.report_paths)
@@ -637,6 +707,8 @@ class MonitorLoop:
 
         try:
             chunks = self.watcher.poll()
+            self._capture_remote_log_observability()
+            self._log_remote_log_notices()
 
             if not chunks:
                 print("[Monitor][WARN] no log chunks read.")
@@ -990,12 +1062,29 @@ class MonitorLoop:
 
         return session
 
+    def _build_remote_log_watermark_store(self) -> RemoteLogWatermarkStore:
+        watermarks = self.project_state.remote_log_watermarks
+
+        def on_update(path: str, watermark: dict[str, Any]) -> None:
+            self.project_state.remote_log_watermarks[path] = dict(watermark)
+            if self.enable_persistent_state:
+                self.state_store.save(self.project_state)
+
+        return RemoteLogWatermarkStore(
+            watermarks=watermarks,
+            on_update=on_update,
+        )
+
     def _build_watcher(self):
         if self.project.is_remote:
             return RemoteLogWatcher(
                 log_files=self.project.log_files,
                 session=self.session,
                 tail_lines=self.project.monitor.tail_lines,
+                max_bytes_per_poll=self.project.monitor.remote_log_max_bytes_per_poll,
+                watermark_store=self._build_remote_log_watermark_store(),
+                watermark_enabled=self.project.monitor.remote_watermark_enabled,
+                shadow_mode=self.project.monitor.remote_watermark_shadow,
             )
 
         return LocalLogWatcher(

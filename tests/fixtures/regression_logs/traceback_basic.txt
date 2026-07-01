@@ -1,0 +1,3 @@
+2026-06-16 12:02:31 Traceback (most recent call last):
+2026-06-16 12:02:32   File "worker.py", line 42, in run
+2026-06-16 12:02:33 Exception: unexpected background task failure

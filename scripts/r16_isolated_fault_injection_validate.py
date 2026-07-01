@@ -14,7 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import recovery.auto_recovery_runtime_controls as runtime_controls
 from detectors import ErrorEvent, ErrorEventDetector
 from monitors.project_registry import PolicyConfig, ProjectConfig
-from policies import RemediationPolicy
+from policies import CompatibilityRemediationPolicy
 from recovery.auto_recovery_runtime_gate import evaluate_runtime_auto_recovery_gate
 from safe_recovery.registry import (
     SAFE_RECOVERY_FIX_IDS,
@@ -243,7 +243,10 @@ def validate_safe_domain_injection(
         dry_run=True,
     )
 
-    decision = RemediationPolicy().decide(event=event, project=project)
+    decision = CompatibilityRemediationPolicy().decide(
+        event=event,
+        project=project,
+    )
     gate = evaluate_runtime_auto_recovery_gate(
         event=event,
         project=project,
@@ -358,7 +361,10 @@ def validate_high_risk_injection(
         fix_ids=sorted(SAFE_RECOVERY_FIX_IDS),
         dry_run=True,
     )
-    decision = RemediationPolicy().decide(event=event, project=project)
+    decision = CompatibilityRemediationPolicy().decide(
+        event=event,
+        project=project,
+    )
     gate = evaluate_runtime_auto_recovery_gate(
         event=event,
         project=project,
@@ -426,7 +432,10 @@ def validate_unknown_event(output_dir: Path) -> dict[str, Any]:
         fix_ids=sorted(SAFE_RECOVERY_FIX_IDS),
         dry_run=True,
     )
-    decision = RemediationPolicy().decide(event=event, project=project)
+    decision = CompatibilityRemediationPolicy().decide(
+        event=event,
+        project=project,
+    )
     gate = evaluate_runtime_auto_recovery_gate(
         event=event,
         project=project,

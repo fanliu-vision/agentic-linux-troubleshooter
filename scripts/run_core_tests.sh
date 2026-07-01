@@ -12,6 +12,7 @@ cd "${PROJECT_ROOT}"
 "${PYTHON_BIN}" -m py_compile notifiers/file_notifier.py
 "${PYTHON_BIN}" -m py_compile notifiers/notification_manager.py
 "${PYTHON_BIN}" -m py_compile recovery/auto_recovery_runner.py
+"${PYTHON_BIN}" -m py_compile safe_recovery/registry_governance.py
 "${PYTHON_BIN}" -m py_compile monitors/cycle_summary_reporter.py
 
 "${PYTHON_BIN}" -m pytest tests -q

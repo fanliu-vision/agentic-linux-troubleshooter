@@ -1,0 +1,2 @@
+2026-06-16 12:02:21 deploy hook failed: sudo required for protected service operation
+2026-06-16 12:02:22 operator_action=manual_privilege_review

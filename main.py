@@ -1,3 +1,11 @@
+"""
+Legacy single-shot troubleshooting CLI.
+
+This historical entry point is kept for ad-hoc diagnosis experiments. It is not
+the monitor, daemon, or auto-recovery entry; use main_monitor.py for the
+official monitoring workflow.
+"""
+
 import sys
 from pathlib import Path
 
@@ -87,10 +95,14 @@ final_answer(\"\"\"
 def main() -> None:
     agent = build_troubleshooting_agent()
 
+    print("=" * 80)
+    print("Legacy single-shot entry: Agentic Linux Troubleshooting Assistant")
+    print("Historical CLI only; use main_monitor.py for monitor/daemon workflows.")
+    print("=" * 80)
+
     if len(sys.argv) > 1:
         user_question = " ".join(sys.argv[1:])
     else:
-        print("Agentic Linux Troubleshooting Assistant")
         print("请输入你的排障问题，例如：")
         print("- 我的训练任务报 HIP out of memory，帮我分析原因")
         print("- ssh 登录时报 No space left on device，帮我定位")

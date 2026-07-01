@@ -238,6 +238,34 @@
     "expected_action": "policy_escalation_only"
   },
   {
+    "case_id": "config_path_basic",
+    "log_file": "config_path_basic.txt",
+    "expected_event_type": "config_path",
+    "expected_issue_type": "config_path",
+    "expected_action": "policy_requires_explicit_allow"
+  },
+  {
+    "case_id": "model_path_basic",
+    "log_file": "model_path_basic.txt",
+    "expected_event_type": "model_path",
+    "expected_issue_type": "model_path",
+    "expected_action": "policy_requires_explicit_allow"
+  },
+  {
+    "case_id": "sudo_required_basic",
+    "log_file": "sudo_required_basic.txt",
+    "expected_event_type": "sudo_required",
+    "expected_issue_type": "system",
+    "expected_action": "policy_escalation_only"
+  },
+  {
+    "case_id": "traceback_basic",
+    "log_file": "traceback_basic.txt",
+    "expected_event_type": "traceback",
+    "expected_issue_type": "log",
+    "expected_action": "policy_report_only"
+  },
+  {
     "case_id": "config_error_basic",
     "log_file": "config_error_basic.log",
     "expected_event_type": "config_error",

@@ -23,9 +23,9 @@
 进入真实执行路径必须同时满足：
 
 - detector 命中上述精确 `event_type`；
-- `RemediationPolicy.DEFAULT_FIX_MAPPING` 映射到对应 fix_id；
-- `projects.yaml` 中 `policy.allow_auto_apply` 显式包含该 fix_id；
-- R15 runtime policy 将该 event_type 配置为 `safe_auto_recover`；
+- registry domain policy 映射到对应 fix_id；
+- project policy overlay 中 `policy.allow_auto_apply` 显式包含该 fix_id；
+- runtime gate 将该 event_type 解析为 `safe_auto_recover`；
 - R15 precheck 通过；
 - rollback 可用；
 - `auto_recovery_dry_run=false` 时才允许真实执行。

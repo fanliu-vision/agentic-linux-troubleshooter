@@ -17,6 +17,7 @@ from monitors.project_registry import (
     PolicyConfig,
     ProjectConfig,
 )
+import recovery.auto_recovery_runtime_controls as runtime_controls
 
 
 def make_project(
@@ -312,8 +313,19 @@ def test_cycle_summary_failure_does_not_affect_successful_events() -> None:
         assert health["last_reports_generated"] == 0
 
 
-def test_auto_recovery_candidates_are_limited_to_one_per_cycle() -> None:
+def test_auto_recovery_candidates_are_limited_to_one_per_cycle(monkeypatch) -> None:
     with tempfile.TemporaryDirectory() as tmp:
+        monkeypatch.setattr(
+            runtime_controls,
+            "_is_tcp_port_available",
+            lambda host, port: True,
+        )
+        project_dir = Path(tmp) / "project"
+        project_dir.mkdir()
+        (project_dir / "config.json").write_text(
+            '{"metrics_port": 9000, "batch_size": 16}',
+            encoding="utf-8",
+        )
         event1 = make_event("gpu_oom", "gpu", "auto-1")
         event2 = make_event("network_port", "network_port", "auto-2", severity="medium")
         loop, _ = make_loop(
@@ -322,6 +334,7 @@ def test_auto_recovery_candidates_are_limited_to_one_per_cycle() -> None:
             project_id="auto_limit",
             auto_recover=True,
         )
+        loop.project.project_dir = str(project_dir)
         handled: list[ErrorEvent] = []
 
         loop._handle_event = lambda event: handled.append(event) or make_record(

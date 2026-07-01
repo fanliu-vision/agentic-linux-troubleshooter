@@ -108,3 +108,110 @@ def test_detect_all_identifies_faults_after_log_tail_truncation(monkeypatch):
 
     assert "process_crash" in event_types
     assert "container_k8s" in event_types
+
+
+def test_stat_remote_log_uses_fixed_readonly_command(monkeypatch):
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout="12345 1048576 1780000000\n", stderr="")
+
+    monkeypatch.setattr(remote_ssh_executor.subprocess, "run", fake_run)
+
+    executor = RemoteReadonlySSHExecutor()
+    result = executor.stat_remote_log(
+        _profile(),
+        remote_path="/tmp/service.log",
+    )
+
+    assert result.allowed is True
+    assert result.return_code == 0
+    assert result.stdout == "12345 1048576 1780000000"
+    assert result.command == "stat -Lc '%i %s %Y' /tmp/service.log"
+    assert calls[0][1]["text"] is True
+    assert calls[0][0][0][-1] == "stat -Lc '%i %s %Y' /tmp/service.log"
+
+
+def test_read_remote_log_range_uses_raw_fixed_readonly_command(monkeypatch):
+    calls = []
+    raw_stdout = b"\nnew bytes\nwith trailing spaces  "
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout=raw_stdout, stderr=b"")
+
+    monkeypatch.setattr(remote_ssh_executor.subprocess, "run", fake_run)
+
+    executor = RemoteReadonlySSHExecutor(max_output_chars=5)
+    result = executor.read_remote_log_range(
+        _profile(),
+        remote_path="/tmp/service.log",
+        offset=5,
+        max_bytes=31,
+    )
+
+    assert result.allowed is True
+    assert result.return_code == 0
+    assert result.stdout == raw_stdout.decode("utf-8", errors="ignore")
+    assert result.command == "tail -c +6 /tmp/service.log | head -c 31"
+    assert calls[0][1]["text"] is False
+    assert calls[0][0][0][-1] == "tail -c +6 /tmp/service.log | head -c 31"
+
+
+def test_read_remote_log_range_decodes_invalid_bytes_with_ignore(monkeypatch):
+    def fake_run(*args, **kwargs):
+        return SimpleNamespace(returncode=0, stdout=b"ok\xff\n", stderr=b"")
+
+    monkeypatch.setattr(remote_ssh_executor.subprocess, "run", fake_run)
+
+    executor = RemoteReadonlySSHExecutor()
+    result = executor.read_remote_log_range(
+        _profile(),
+        remote_path="/tmp/service.log",
+        offset=0,
+        max_bytes=4,
+    )
+
+    assert result.stdout == "ok\n"
+
+
+def test_remote_log_range_pipe_is_not_allowed_through_generic_run(monkeypatch):
+    def fake_run(*args, **kwargs):
+        return SimpleNamespace(returncode=0, stdout=b"incremental", stderr=b"")
+
+    monkeypatch.setattr(remote_ssh_executor.subprocess, "run", fake_run)
+
+    executor = RemoteReadonlySSHExecutor()
+
+    generic = executor.run(
+        _profile(),
+        "tail -c +1 /tmp/service.log | head -c 10",
+    )
+    fixed = executor.read_remote_log_range(
+        _profile(),
+        remote_path="/tmp/service.log",
+        offset=0,
+        max_bytes=10,
+    )
+
+    assert generic.allowed is False
+    assert fixed.allowed is True
+
+
+def test_remote_log_stat_and_range_reject_unsafe_path():
+    executor = RemoteReadonlySSHExecutor()
+
+    stat = executor.stat_remote_log(
+        _profile(),
+        remote_path="/tmp/service.log;rm",
+    )
+    ranged = executor.read_remote_log_range(
+        _profile(),
+        remote_path="/tmp/service.log|cat",
+        offset=0,
+        max_bytes=10,
+    )
+
+    assert stat.allowed is False
+    assert ranged.allowed is False

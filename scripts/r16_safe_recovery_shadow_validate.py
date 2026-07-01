@@ -16,8 +16,7 @@ from detectors import ErrorEvent
 from fixers.apply_executor import SafeApplyExecutor
 from fixers.remote_apply_executor import RemoteSafeApplyExecutor
 from monitors.project_registry import PolicyConfig, ProjectConfig, ProjectRegistry
-from policies import RemediationDecision, RemediationPolicy
-from policies.auto_recovery_policy import MANUAL_ESCALATION_EVENT_TYPES
+from policies import CompatibilityRemediationPolicy, RemediationDecision
 from recovery.auto_recovery_runtime_gate import (
     build_runtime_auto_recovery_policy,
     evaluate_runtime_auto_recovery_gate,
@@ -26,8 +25,12 @@ from recovery.guarded_auto_recover_dry_run import (
     FORBIDDEN_ACTIONS,
     evaluate_guarded_auto_recover_dry_run,
 )
-from safe_recovery.registry import SAFE_RECOVERY_FIX_IDS, SafeRecoverySpec
-from safe_recovery.registry import iter_safe_recovery_specs
+from safe_recovery.registry import (
+    SAFE_RECOVERY_FIX_IDS,
+    SafeRecoverySpec,
+    iter_safe_recovery_specs,
+    manual_event_types,
+)
 from safe_recovery.semantics import (
     SEMANTIC_DISABLE_BOOL,
     SEMANTIC_LOWER_INT,
@@ -215,12 +218,13 @@ def build_shadow_summary(output_dir: Path) -> dict[str, Any]:
         missing_items.append("high-risk event type escaped manual/diagnose fallback")
 
     unknown_fix_gate = evaluate_unknown_fix(output_dir, specs[0])
-    unknown_fix_downgrades = bool(
-        not unknown_fix_gate.allowed_to_execute
-        and not unknown_fix_gate.auto_recover_allowed
+    legacy_unknown_fix_ignored = bool(
+        unknown_fix_gate.candidate_fix_id == specs[0].fix_id
+        and unknown_fix_gate.selected_fix_id == specs[0].fix_id
+        and unknown_fix_gate.auto_recover_allowed
     )
-    if not unknown_fix_downgrades:
-        missing_items.append("unknown fix_id did not downgrade")
+    if not legacy_unknown_fix_ignored:
+        missing_items.append("legacy unknown fix_id still influenced runtime gate")
 
     coverage_counts = {
         "positive_fixture": sum(1 for row in domain_rows if row["positive_fixture"]),
@@ -243,7 +247,7 @@ def build_shadow_summary(output_dir: Path) -> dict[str, Any]:
         or not dry_run_rerun_blocked
         or not forbidden_action_blocked
         or not high_risk_manual
-        or not unknown_fix_downgrades
+        or not legacy_unknown_fix_ignored
     ):
         conclusion = "FAIL"
 
@@ -267,7 +271,7 @@ def build_shadow_summary(output_dir: Path) -> dict[str, Any]:
         "dry_run_blocks_rerun": dry_run_rerun_blocked,
         "forbidden_action_blocked": forbidden_action_blocked,
         "high_risk_manual_or_diagnose": high_risk_manual,
-        "unknown_fix_downgrades": unknown_fix_downgrades,
+        "legacy_unknown_fix_ignored": legacy_unknown_fix_ignored,
         "configured_project_dry_run": configured_project.policy.auto_recovery_dry_run,
         "configured_allowlist": list(configured_project.policy.allow_auto_apply),
         "missing_items": missing_items,
@@ -339,7 +343,10 @@ def evaluate_shadow_gate(
         dry_run=dry_run,
     )
     event = make_event(spec)
-    decision = RemediationPolicy().decide(event=event, project=project)
+    decision = CompatibilityRemediationPolicy().decide(
+        event=event,
+        project=project,
+    )
     return evaluate_runtime_auto_recovery_gate(
         event=event,
         project=project,
@@ -394,7 +401,7 @@ def validate_manual_domains(output_dir: Path) -> list[dict[str, Any]]:
         dry_run=True,
     )
     rows = []
-    for event_type in sorted(MANUAL_ESCALATION_EVENT_TYPES):
+    for event_type in sorted(manual_event_types()):
         event = ErrorEvent(
             event_type=event_type,
             issue_type=event_type,
@@ -404,7 +411,10 @@ def validate_manual_domains(output_dir: Path) -> list[dict[str, Any]]:
             raw_excerpt=f"{event_type} manual raw evidence",
             signature=f"r16-shadow-manual-{event_type}",
         )
-        decision = RemediationPolicy().decide(event=event, project=project)
+        decision = CompatibilityRemediationPolicy().decide(
+            event=event,
+            project=project,
+        )
         rows.append(
             {
                 "event_type": event_type,
@@ -570,7 +580,7 @@ def write_summary(output_dir: Path, summary: dict[str, Any]) -> Path:
         f"- dry-run blocks rerun: `{summary['dry_run_blocks_rerun']}`",
         f"- forbidden actions blocked: `{summary['forbidden_action_blocked']}`",
         f"- high-risk domains remain manual/diagnose: `{summary['high_risk_manual_or_diagnose']}`",
-        f"- unknown fix_id downgrades: `{summary['unknown_fix_downgrades']}`",
+        f"- legacy unknown fix_id ignored: `{summary['legacy_unknown_fix_ignored']}`",
         "",
         "## Per-Domain Coverage",
         "",

@@ -53,7 +53,7 @@ acceptance_artifacts/r16_safe_domain_validation_20260623_091843/R16_SAFE_RECOVER
 | dry-run blocks execution | `11/11` |
 | forbidden action blocked | `11/11` |
 | high-risk manual/diagnose fallback | `True` |
-| unknown fix_id downgrade | `True` |
+| legacy unknown fix_id ignored by runtime gate | `True` |
 | conclusion | `PASS` |
 
 ## 5. 后续建议

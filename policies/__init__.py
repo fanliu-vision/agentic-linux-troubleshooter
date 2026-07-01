@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 __all__ = [
+    "CompatibilityRemediationPolicy",
     "RemediationPolicy",
     "RemediationDecision",
 ]
@@ -10,9 +11,14 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     if name in __all__:
-        from .remediation_policy import RemediationDecision, RemediationPolicy
+        from .remediation_policy import (
+            CompatibilityRemediationPolicy,
+            RemediationDecision,
+            RemediationPolicy,
+        )
 
         exports = {
+            "CompatibilityRemediationPolicy": CompatibilityRemediationPolicy,
             "RemediationPolicy": RemediationPolicy,
             "RemediationDecision": RemediationDecision,
         }

@@ -8,7 +8,7 @@ R17 进入真实 / 仿生产日志的只读 shadow 阶段。本阶段不扩大 s
 Evaluator 只运行：
 
 - `ErrorEventDetector.detect_all()` / `detect()`;
-- 基于合成只读项目策略的 `RemediationPolicy.decide()`。
+- 基于合成只读 project policy overlay 的 `CompatibilityRemediationPolicy.decide()` 兼容输出。
 
 它不会调用 `MonitorLoop`、`AutoRecoveryRunner`、apply、rerun、rollback、
 notification 或真实报告生成链路。

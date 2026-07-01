@@ -101,6 +101,6 @@ R15-7 已按该范围完成受控验证：`network_port / fix-network-1` 与 `gp
 
 ## 最终结论
 
-R15 自动恢复策略安全分层阶段完成。系统已具备策略校验、策略解析、dry-run、guarded dry-run、R15 runtime gate、强制 audit/report/alert、真实 precheck、执行层 cooldown、rollback 成功/失败审计和 failure-path controlled validation。
+R15 自动恢复策略安全分层阶段完成。系统已具备策略校验、策略解析、dry-run、guarded dry-run、runtime gate、强制 audit/report/alert、真实 precheck、执行层 cooldown、rollback 成功/失败审计和 failure-path controlled validation。
 
 真实自动恢复能力已被限制在显式 `safe_auto_recover` allowlist 内；默认运行配置保持 `auto_recovery_dry_run: true`。后续新增恢复域应进入 R16，并按 schema、precheck、dry-run、failure-path、isolated live validation 的顺序逐级验证。

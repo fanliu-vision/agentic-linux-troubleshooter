@@ -218,6 +218,68 @@ def test_unknown_event_type_does_not_auto_recover() -> None:
     assert not decision.auto_recover_allowed
 
 
+def test_registry_rejects_safe_auto_recover_for_unregistered_event() -> None:
+    policy = make_policy(
+        event_type_policies={
+            "unknown_future_domain": safe_network_policy(),
+        }
+    )
+
+    with pytest.raises(PolicyValidationError, match="requires registry domain"):
+        validate_policy(policy)
+
+
+def test_registry_rejects_safe_auto_recover_for_manual_domain() -> None:
+    policy = make_policy(
+        event_type_policies={
+            "disk_full": safe_network_policy(),
+        }
+    )
+
+    with pytest.raises(PolicyValidationError, match="requires registry safe_auto_recover"):
+        validate_policy(policy)
+
+
+def test_registry_rejects_safe_auto_recover_with_wrong_fix_id() -> None:
+    policy = make_policy(
+        event_type_policies={
+            "network_port": safe_network_policy(allowed_fix_ids=["fix-gpu-1"]),
+        }
+    )
+
+    with pytest.raises(PolicyValidationError, match="must match registry"):
+        validate_policy(policy)
+
+
+def test_manual_domain_policy_never_selects_candidate_fix_id() -> None:
+    decision = resolve("python_env", "fix-python-1")
+
+    assert decision.strategy_layer == StrategyLayer.MANUAL_ESCALATION
+    assert not decision.auto_recover_allowed
+    assert decision.selected_fix_id == ""
+    assert decision.operator_required
+
+
+def test_explicit_event_policy_is_not_overridden_by_registry_manual_set() -> None:
+    policy = make_policy(
+        event_type_policies={
+            "python_env": EventTypePolicy(
+                strategy_layer=StrategyLayer.DIAGNOSE_ONLY,
+                risk_level=RiskLevel.MEDIUM,
+                allowed_fix_ids=[],
+                audit_required=True,
+                fallback_strategy=StrategyLayer.MANUAL_ESCALATION,
+            )
+        }
+    )
+
+    decision = resolve("python_env", "fix-python-1", policy=policy)
+
+    assert decision.strategy_layer == StrategyLayer.DIAGNOSE_ONLY
+    assert not decision.auto_recover_allowed
+    assert decision.selected_fix_id == ""
+
+
 def test_process_crash_resolves_to_manual_escalation() -> None:
     decision = resolve("process_crash")
 

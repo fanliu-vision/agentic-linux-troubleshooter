@@ -33,6 +33,27 @@ class SafeRecoverySpec:
     remote_failure_message: str
 
 
+@dataclass(frozen=True)
+class RecoveryDomainSpec:
+    event_type: str
+    issue_type: str
+    strategy_layer: str
+    risk_level: str
+    fix_id: str = ""
+    operator_required: bool = False
+    fallback_strategy: str = "manual_escalation"
+    reason: str = ""
+
+
+STRATEGY_DIAGNOSE_ONLY = "diagnose_only"
+STRATEGY_MANUAL_ESCALATION = "manual_escalation"
+STRATEGY_SAFE_AUTO_RECOVER = "safe_auto_recover"
+
+RISK_LOW = "low"
+RISK_MEDIUM = "medium"
+RISK_HIGH = "high"
+
+
 SAFE_RECOVERY_SPECS: tuple[SafeRecoverySpec, ...] = (
     SafeRecoverySpec(
         event_type="network_port",
@@ -530,8 +551,250 @@ SAFE_ACTION_DESCRIPTIONS = {
 }
 
 
+def _safe_recovery_domain_specs() -> tuple[RecoveryDomainSpec, ...]:
+    return tuple(
+        RecoveryDomainSpec(
+            event_type=spec.event_type,
+            issue_type=spec.issue_type,
+            strategy_layer=STRATEGY_SAFE_AUTO_RECOVER,
+            risk_level=RISK_LOW,
+            fix_id=spec.fix_id,
+            operator_required=False,
+            fallback_strategy=STRATEGY_MANUAL_ESCALATION,
+            reason=spec.low_risk_reason,
+        )
+        for spec in SAFE_RECOVERY_SPECS
+    )
+
+
+MANUAL_RECOVERY_DOMAIN_SPECS: tuple[RecoveryDomainSpec, ...] = (
+    RecoveryDomainSpec(
+        event_type="auth_cert",
+        issue_type="auth_cert",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        operator_required=True,
+        reason="auth and certificate changes require owner-controlled credentials",
+    ),
+    RecoveryDomainSpec(
+        event_type="config_error",
+        issue_type="config",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        operator_required=True,
+        reason="invalid or missing core config requires operator intent",
+    ),
+    RecoveryDomainSpec(
+        event_type="container_k8s",
+        issue_type="container_k8s",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        operator_required=True,
+        reason="container and Kubernetes changes can affect runtime topology",
+    ),
+    RecoveryDomainSpec(
+        event_type="dependency_service",
+        issue_type="dependency_service",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        operator_required=True,
+        reason="dependency service failures require upstream service ownership",
+    ),
+    RecoveryDomainSpec(
+        event_type="disk_full",
+        issue_type="disk",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        operator_required=True,
+        reason="disk cleanup can delete data or affect other services",
+    ),
+    RecoveryDomainSpec(
+        event_type="host_resource",
+        issue_type="host_resource",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        operator_required=True,
+        reason="host resource remediation can affect co-located workloads",
+    ),
+    RecoveryDomainSpec(
+        event_type="network_connectivity",
+        issue_type="network_connectivity",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        operator_required=True,
+        reason="network connectivity failures often require infrastructure changes",
+    ),
+    RecoveryDomainSpec(
+        event_type="permission_denied",
+        issue_type="permission",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        operator_required=True,
+        reason="permission changes require explicit privilege ownership",
+    ),
+    RecoveryDomainSpec(
+        event_type="process_crash",
+        issue_type="process",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        operator_required=True,
+        reason="process crashes need diagnosis before process-level action",
+    ),
+    RecoveryDomainSpec(
+        event_type="process_kill",
+        issue_type="process",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        operator_required=True,
+        reason="killed processes can indicate system or scheduler intervention",
+    ),
+    RecoveryDomainSpec(
+        event_type="python_env",
+        issue_type="python_env",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        fix_id="fix-python-1",
+        operator_required=True,
+        reason="Python environment repair may require package or interpreter changes",
+    ),
+    RecoveryDomainSpec(
+        event_type="slurm",
+        issue_type="slurm",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        operator_required=True,
+        reason="Slurm remediation can affect scheduler-owned jobs and nodes",
+    ),
+    RecoveryDomainSpec(
+        event_type="sudo_required",
+        issue_type="system",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        operator_required=True,
+        reason="privilege escalation must be handled explicitly by an operator",
+    ),
+    RecoveryDomainSpec(
+        event_type="unknown",
+        issue_type="unknown",
+        strategy_layer=STRATEGY_MANUAL_ESCALATION,
+        risk_level=RISK_HIGH,
+        operator_required=True,
+        reason="unknown failures require human triage before remediation",
+    ),
+)
+
+DIAGNOSE_RECOVERY_DOMAIN_SPECS: tuple[RecoveryDomainSpec, ...] = (
+    RecoveryDomainSpec(
+        event_type="config_path",
+        issue_type="config_path",
+        strategy_layer=STRATEGY_DIAGNOSE_ONLY,
+        risk_level=RISK_MEDIUM,
+        fix_id="fix-config-path-1",
+        operator_required=False,
+        reason="legacy config path fix metadata is retained but not auto-executable",
+    ),
+    RecoveryDomainSpec(
+        event_type="model_path",
+        issue_type="model_path",
+        strategy_layer=STRATEGY_DIAGNOSE_ONLY,
+        risk_level=RISK_MEDIUM,
+        fix_id="fix-model-path-1",
+        operator_required=False,
+        reason="legacy model path fix metadata is retained but not auto-executable",
+    ),
+    RecoveryDomainSpec(
+        event_type="traceback",
+        issue_type="log",
+        strategy_layer=STRATEGY_DIAGNOSE_ONLY,
+        risk_level=RISK_MEDIUM,
+        operator_required=False,
+        reason="generic traceback evidence requires more specific classification",
+    ),
+)
+
+
+RECOVERY_DOMAIN_SPECS: tuple[RecoveryDomainSpec, ...] = (
+    *_safe_recovery_domain_specs(),
+    *MANUAL_RECOVERY_DOMAIN_SPECS,
+    *DIAGNOSE_RECOVERY_DOMAIN_SPECS,
+)
+
+RECOVERY_DOMAIN_SPECS_BY_EVENT_TYPE = {
+    spec.event_type: spec for spec in RECOVERY_DOMAIN_SPECS
+}
+RECOVERY_DOMAIN_SPECS_BY_ISSUE_TYPE: dict[str, tuple[RecoveryDomainSpec, ...]] = {
+    issue_type: tuple(
+        spec for spec in RECOVERY_DOMAIN_SPECS if spec.issue_type == issue_type
+    )
+    for issue_type in {spec.issue_type for spec in RECOVERY_DOMAIN_SPECS}
+}
+
+def domain_event_types() -> frozenset[str]:
+    return frozenset(RECOVERY_DOMAIN_SPECS_BY_EVENT_TYPE)
+
+
+def safe_event_types() -> frozenset[str]:
+    return frozenset(
+        spec.event_type
+        for spec in RECOVERY_DOMAIN_SPECS
+        if spec.strategy_layer == STRATEGY_SAFE_AUTO_RECOVER
+    )
+
+
+def manual_event_types() -> frozenset[str]:
+    return frozenset(
+        spec.event_type
+        for spec in RECOVERY_DOMAIN_SPECS
+        if spec.strategy_layer == STRATEGY_MANUAL_ESCALATION
+    )
+
+
+def diagnose_event_types() -> frozenset[str]:
+    return frozenset(
+        spec.event_type
+        for spec in RECOVERY_DOMAIN_SPECS
+        if spec.strategy_layer == STRATEGY_DIAGNOSE_ONLY
+    )
+
+
+def fix_mapping_by_event_type() -> dict[str, str]:
+    return {
+        spec.event_type: spec.fix_id
+        for spec in RECOVERY_DOMAIN_SPECS
+        if spec.fix_id
+    }
+
+
+def manual_event_types_without_fix() -> frozenset[str]:
+    return frozenset(
+        spec.event_type
+        for spec in RECOVERY_DOMAIN_SPECS
+        if spec.strategy_layer == STRATEGY_MANUAL_ESCALATION and not spec.fix_id
+    )
+
+
+def manual_issue_types_without_fix() -> frozenset[str]:
+    return frozenset(
+        spec.issue_type
+        for spec in RECOVERY_DOMAIN_SPECS
+        if spec.strategy_layer == STRATEGY_MANUAL_ESCALATION and not spec.fix_id
+    )
+
+
+# Compatibility aliases retained for one release cycle. New code should prefer
+# the helper functions above so downstream sets cannot drift from registry.
+RECOVERY_DOMAIN_EVENT_TYPES = domain_event_types()
+SAFE_CANDIDATE_EVENT_TYPES = safe_event_types()
+MANUAL_ESCALATION_EVENT_TYPES = manual_event_types()
+DIAGNOSE_ONLY_EVENT_TYPES = diagnose_event_types()
+
+
 def iter_safe_recovery_specs() -> tuple[SafeRecoverySpec, ...]:
     return SAFE_RECOVERY_SPECS
+
+
+def iter_recovery_domain_specs() -> tuple[RecoveryDomainSpec, ...]:
+    return RECOVERY_DOMAIN_SPECS
 
 
 def get_safe_recovery_spec_by_fix_id(fix_id: str) -> SafeRecoverySpec | None:
@@ -544,6 +807,12 @@ def get_safe_recovery_spec_for_event_type(
     return SAFE_RECOVERY_SPECS_BY_EVENT_TYPE.get(event_type)
 
 
+def get_recovery_domain_spec_for_event_type(
+    event_type: str,
+) -> RecoveryDomainSpec | None:
+    return RECOVERY_DOMAIN_SPECS_BY_EVENT_TYPE.get(event_type)
+
+
 def safe_fix_id_for_event_type(event_type: str) -> str:
     spec = get_safe_recovery_spec_for_event_type(event_type)
     return spec.fix_id if spec is not None else ""
@@ -552,3 +821,33 @@ def safe_fix_id_for_event_type(event_type: str) -> str:
 def safe_fix_id_for_issue_type(issue_type: str) -> str:
     spec = SAFE_RECOVERY_SPECS_BY_ISSUE_TYPE.get(issue_type)
     return spec.fix_id if spec is not None else ""
+
+
+def fix_id_for_event_type(event_type: str) -> str:
+    spec = get_recovery_domain_spec_for_event_type(event_type)
+    return spec.fix_id if spec is not None else ""
+
+
+def fix_id_for_issue_type(issue_type: str) -> str:
+    specs = RECOVERY_DOMAIN_SPECS_BY_ISSUE_TYPE.get(issue_type, ())
+    for spec in specs:
+        if spec.fix_id:
+            return spec.fix_id
+    return ""
+
+
+def strategy_for_event_type(event_type: str) -> str:
+    spec = get_recovery_domain_spec_for_event_type(event_type)
+    return spec.strategy_layer if spec is not None else "unregistered"
+
+
+def strategy_for_issue_type(issue_type: str) -> str:
+    specs = RECOVERY_DOMAIN_SPECS_BY_ISSUE_TYPE.get(issue_type, ())
+    strategies = {spec.strategy_layer for spec in specs}
+    if STRATEGY_MANUAL_ESCALATION in strategies:
+        return STRATEGY_MANUAL_ESCALATION
+    if STRATEGY_SAFE_AUTO_RECOVER in strategies:
+        return STRATEGY_SAFE_AUTO_RECOVER
+    if STRATEGY_DIAGNOSE_ONLY in strategies:
+        return STRATEGY_DIAGNOSE_ONLY
+    return "unregistered"

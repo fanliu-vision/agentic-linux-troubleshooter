@@ -231,6 +231,70 @@ class RemoteReadonlySSHExecutor:
         command = f"tail -n {lines} {remote_path}"
         return self.run(profile, command, preserve_tail_on_truncate=True)
 
+    def stat_remote_log(
+        self,
+        profile: RemoteSSHProfile,
+        remote_path: str,
+    ) -> RemoteCommandResult:
+        if not self._safe_remote_path(remote_path):
+            return RemoteCommandResult(
+                command=f"stat -Lc '%i %s %Y' {remote_path}",
+                profile=profile,
+                allowed=False,
+                reason="远程日志路径包含不安全字符。",
+            )
+
+        quoted = shlex.quote(remote_path)
+        command = f"stat -Lc '%i %s %Y' {quoted}"
+        return self._run_fixed_readonly(
+            profile=profile,
+            command=command,
+            display_command=f"stat -Lc '%i %s %Y' {remote_path}",
+            reason="固定远程日志 stat 命令，只读执行。",
+        )
+
+    def read_remote_log_range(
+        self,
+        profile: RemoteSSHProfile,
+        remote_path: str,
+        offset: int,
+        max_bytes: int,
+    ) -> RemoteCommandResult:
+        if not self._safe_remote_path(remote_path):
+            return RemoteCommandResult(
+                command=f"tail -c +{offset + 1} {remote_path} | head -c {max_bytes}",
+                profile=profile,
+                allowed=False,
+                reason="远程日志路径包含不安全字符。",
+            )
+
+        if offset < 0:
+            return RemoteCommandResult(
+                command=f"remote-log-range {remote_path}",
+                profile=profile,
+                allowed=False,
+                reason="远程日志 offset 不能为负数。",
+            )
+
+        if max_bytes <= 0:
+            return RemoteCommandResult(
+                command=f"remote-log-range {remote_path}",
+                profile=profile,
+                allowed=False,
+                reason="远程日志 max_bytes 必须大于 0。",
+            )
+
+        quoted = shlex.quote(remote_path)
+        start_byte = offset + 1
+        command = f"tail -c +{start_byte} {quoted} | head -c {max_bytes}"
+
+        return self._run_fixed_readonly_raw(
+            profile=profile,
+            command=command,
+            display_command=f"tail -c +{start_byte} {remote_path} | head -c {max_bytes}",
+            reason="固定远程日志 byte range 读取命令，只读执行。",
+        )
+
     def collect_remote_project_context(
         self,
         profile: RemoteSSHProfile,
@@ -374,6 +438,7 @@ class RemoteReadonlySSHExecutor:
         profile: RemoteSSHProfile,
         command: str,
         display_command: str,
+        reason: str = "固定远程项目上下文扫描命令，只读执行。",
     ) -> RemoteCommandResult:
         ssh_cmd = [
             "ssh",
@@ -403,7 +468,7 @@ class RemoteReadonlySSHExecutor:
                 return_code=completed.returncode,
                 stdout=self._truncate(completed.stdout.strip()),
                 stderr=self._truncate(completed.stderr.strip()),
-                reason="固定远程项目上下文扫描命令，只读执行。",
+                reason=reason,
             )
 
         except subprocess.TimeoutExpired:
@@ -417,6 +482,55 @@ class RemoteReadonlySSHExecutor:
                 reason=f"远程上下文扫描超过 {self.timeout}s 超时时间。",
             )
 
+    def _run_fixed_readonly_raw(
+        self,
+        profile: RemoteSSHProfile,
+        command: str,
+        display_command: str,
+        reason: str,
+    ) -> RemoteCommandResult:
+        ssh_cmd = [
+            "ssh",
+            "-p",
+            str(profile.port),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
+            profile.target,
+            command,
+        ]
+
+        try:
+            completed = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=False,
+                timeout=self.timeout,
+                check=False,
+            )
+
+            return RemoteCommandResult(
+                command=display_command,
+                profile=profile,
+                allowed=True,
+                return_code=completed.returncode,
+                stdout=self._decode_process_output(completed.stdout),
+                stderr=self._truncate(self._decode_process_output(completed.stderr).strip()),
+                reason=reason,
+            )
+
+        except subprocess.TimeoutExpired:
+            return RemoteCommandResult(
+                command=display_command,
+                profile=profile,
+                allowed=True,
+                return_code=124,
+                stdout="",
+                stderr="REMOTE_LOG_RANGE_TIMEOUT",
+                reason=f"远程日志 byte range 读取超过 {self.timeout}s 超时时间。",
+            )
+
     def _safe_remote_path(self, path: str) -> bool:
         if not path or len(path) > 300:
             return False
@@ -426,6 +540,14 @@ class RemoteReadonlySSHExecutor:
             return False
 
         return True
+
+    @staticmethod
+    def _decode_process_output(value: bytes | str | None) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="ignore")
+        return value
 
     def _truncate(self, text: str, preserve_tail_on_truncate: bool = False) -> str:
         if len(text) > self.max_output_chars:

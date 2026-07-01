@@ -495,7 +495,7 @@ R15-3 的实现边界如下：
 - 只做 policy schema validator / resolver；
 - 不接入 `MonitorLoop`；
 - 不接入 `AutoRecoveryRunner`；
-- 不修改既有 `RemediationPolicy` 运行逻辑；
+- 不修改既有兼容策略适配器输出；
 - 不读取或修改真实 `configs/projects.yaml`；
 - 不新增恢复动作；
 - 不扩大 `auto_recover` 权限；
@@ -517,7 +517,7 @@ R15-3 resolver 保持保守默认：
 | `optional_dependency_missing` | 仅在命中显式允许的 `fix-optional-dep-1` 时返回 `safe_auto_recover` candidate；不代表通用 `python_env` |
 | `worker_overload` | 仅在命中显式允许的 `fix-worker-1` 时返回 `safe_auto_recover` candidate；不代表主机级 `host_resource` |
 
-该实现本身只产生策略决策；真实恢复仍由运行链路、项目 policy allowlist、R15 runtime gate、precheck、rollback 和 AutoRecoveryRunner 边界共同决定。
+该实现本身只产生策略解析结果；真实恢复仍由 registry domain policy、project policy overlay、runtime gate、precheck、rollback 和 AutoRecoveryRunner 边界共同决定。
 
 ## 13. R15-4 policy schema dry-run 说明
 

@@ -11,7 +11,10 @@ from routers import classify_issue_dict, format_route_context
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Stage-3 V3 Dynamic Multi-Agent Linux Troubleshooting Assistant"
+        description=(
+            "Legacy / experimental Stage-3 V3 Dynamic Multi-Agent Linux Troubleshooting CLI "
+            "(not the monitor/daemon entry)."
+        )
     )
     parser.add_argument(
         "question",
@@ -102,7 +105,8 @@ def main() -> None:
         raise SystemExit(1)
 
     print("\n" + "=" * 100)
-    print("Stage-3 V3 Dynamic Multi-Agent Linux Troubleshooting Assistant")
+    print("Legacy / experimental entry: Stage-3 V3 Dynamic Multi-Agent Linux Troubleshooting Assistant")
+    print("Historical CLI only; use main_monitor.py for monitor/daemon workflows.")
     print("=" * 100)
 
     print("\n" + "=" * 100)

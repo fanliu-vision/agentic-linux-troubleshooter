@@ -7,7 +7,7 @@ from typing import Any
 
 from detectors import ErrorEvent
 from monitors.project_registry import ProjectConfig
-from policies import RemediationDecision, RemediationPolicy
+from policies import CompatibilityRemediationPolicy, RemediationDecision
 from recovery.auto_recovery_runtime_gate import (
     RuntimeAutoRecoveryGateResult,
     evaluate_runtime_auto_recovery_gate,
@@ -29,6 +29,8 @@ class AutoRecoveryResult:
     report_paths: list[str] = field(default_factory=list)
     messages: list[str] = field(default_factory=list)
     r15_gate: RuntimeAutoRecoveryGateResult | None = None
+    legacy_decision: RemediationDecision | None = None
+    decision_shadow: dict[str, Any] = field(default_factory=dict)
     apply_edit_summary: list[dict[str, Any]] = field(default_factory=list)
     rollback_edit_summary: list[dict[str, Any]] = field(default_factory=list)
 
@@ -77,6 +79,17 @@ class AutoRecoveryResult:
                     "r15.runtime.not_evaluated",
                 ),
                 "action": self.decision.action,
+                "legacy_policy_action": (
+                    self.legacy_decision.action
+                    if self.legacy_decision is not None
+                    else ""
+                ),
+                "legacy_policy_fix_id": (
+                    self.legacy_decision.fix_id
+                    if self.legacy_decision is not None
+                    else ""
+                ),
+                "decision_shadow": dict(self.decision_shadow),
                 "candidate_fix_id": gate_record.get(
                     "candidate_fix_id",
                     self.decision.fix_id or "",
@@ -285,7 +298,7 @@ class AutoRecoveryResult:
         if self.r15_gate is not None:
             lines.extend(
                 [
-                    "### R15 runtime gate audit",
+                    "### Runtime gate audit",
                     "",
                     self.r15_gate.to_markdown(),
                     "",
@@ -294,7 +307,7 @@ class AutoRecoveryResult:
 
         lines.extend(
             [
-                "### R15 forced recovery audit fields",
+                "### Runtime gate audit fields",
                 "",
                 "```json",
                 f"{self._audit_json(audit)}",
@@ -332,29 +345,26 @@ class AutoRecoveryRunner:
     Stage 6C 自动恢复执行器。
 
     流程：
-    1. 根据 ErrorEvent 调用 RemediationPolicy；
-    2. 如果允许自动恢复，执行 apply / remote-apply；
-    3. apply 后执行 rerun / remote-rerun；
-    4. rerun 成功则生成恢复报告；
-    5. rerun 失败则 rollback，并生成升级报告。
+    1. CompatibilityRemediationPolicy 生成兼容输出；
+    2. runtime gate 根据 registry domain policy 和 project policy overlay 作最终裁决；
+    3. gate 允许时执行 apply / remote-apply；
+    4. apply 后执行 rerun / remote-rerun；
+    5. rerun 失败则 rollback，并生成报告。
     """
 
     def __init__(
         self,
         project: ProjectConfig,
         session: TroubleshootingSession,
-        policy: RemediationPolicy | None = None,
+        policy: CompatibilityRemediationPolicy | None = None,
     ) -> None:
         self.project = project
         self.session = session
-        self.policy = policy or RemediationPolicy()
+        self.policy = policy or CompatibilityRemediationPolicy()
         self.cooldown_tracker = RuntimeAutoRecoveryCooldownTracker.from_project(project)
 
     def is_auto_recover_candidate(self, event: ErrorEvent) -> bool:
         decision = self.policy.decide(event=event, project=self.project)
-        if not decision.is_auto_recover:
-            return False
-
         gate = evaluate_runtime_auto_recovery_gate(
             event=event,
             project=self.project,
@@ -368,7 +378,7 @@ class AutoRecoveryRunner:
         if "ambiguous_event_evidence" in (gate.precheck_result.get("reasons") or []):
             return False
 
-        return gate.is_candidate
+        return gate.is_candidate and gate.precheck_result.get("passed") is True
 
     def recover(self, event: ErrorEvent) -> AutoRecoveryResult:
         issue_type = getattr(event, "issue_type", getattr(event, "event_type", "unknown"))
@@ -383,6 +393,7 @@ class AutoRecoveryRunner:
             event_type=event.event_type,
             issue_type=issue_type,
             decision=decision,
+            legacy_decision=decision,
         )
 
         self.session.add_evidence(
@@ -404,7 +415,7 @@ class AutoRecoveryRunner:
         )
         result.r15_gate = gate
 
-        if decision.is_auto_recover and gate.allowed_to_execute:
+        if gate.allowed_to_execute:
             reservation = self.cooldown_tracker.reserve(
                 event_type=event.event_type,
                 fingerprint=event.fingerprint,
@@ -419,31 +430,26 @@ class AutoRecoveryRunner:
                 )
             refresh_runtime_auto_recovery_audit(gate)
 
+        result.decision = self._decision_from_r15_gate(
+            legacy_decision=decision,
+            gate=gate,
+        )
+        result.decision_shadow = self._decision_shadow(
+            legacy_decision=decision,
+            final_decision=result.decision,
+            gate=gate,
+        )
+
         self.session.add_evidence(
             content=gate.to_markdown(),
             source="r15_auto_recovery_gate",
-            title=f"R15 auto recovery gate: {event.event_type}",
+            title=f"Runtime auto recovery gate: {event.event_type}",
             issue_type=issue_type,
         )
 
-        if not decision.is_auto_recover:
-            result.messages.append(
-                "[Escalation] 当前事件不满足自动修复条件，已进入负责人通知 / 报告流程。"
-            )
-            self._record_result(result)
-            self._generate_report(
-                result,
-                evidence_items=self.session.evidence_items[report_scope_start:],
-            )
-            return result
-
         if not gate.allowed_to_execute:
-            result.decision = self._downgrade_decision_for_r15_gate(
-                decision=decision,
-                gate=gate,
-            )
             result.messages.append(
-                "[R15Gate] 自动恢复未执行："
+                "[RuntimeGate] 自动恢复未执行："
                 f"strategy_layer={gate.strategy_layer}, "
                 f"dry_run={gate.dry_run}, "
                 f"would_execute={gate.would_execute}, "
@@ -457,18 +463,22 @@ class AutoRecoveryRunner:
             return result
 
         result.messages.append(
-            f"[Policy] 自动恢复已允许，准备执行 fix_id={decision.fix_id}。"
+            f"[Policy] 自动恢复已允许，准备执行 fix_id={result.decision.fix_id}。"
         )
 
         try:
             self._generate_fix_plan_if_possible(result)
 
             if self.project.is_remote:
-                self._run_remote_recovery(decision, result)
+                self._run_remote_recovery(result.decision, result)
             else:
-                self._run_local_recovery(decision, result)
+                self._run_local_recovery(result.decision, result)
 
-            if result.apply_success and not result.rerun_success and decision.rollback_on_failure:
+            if (
+                result.apply_success
+                and not result.rerun_success
+                and result.decision.rollback_on_failure
+            ):
                 self._rollback(result)
 
             self._record_result(result)
@@ -481,7 +491,7 @@ class AutoRecoveryRunner:
         except Exception as exc:
             result.messages.append(f"[RecoveryError] 自动恢复过程中出现异常：{type(exc).__name__}: {exc}")
 
-            if decision.rollback_on_failure:
+            if result.decision.rollback_on_failure:
                 self._rollback(result)
 
             self._record_result(result)
@@ -490,6 +500,33 @@ class AutoRecoveryRunner:
                 evidence_items=self.session.evidence_items[report_scope_start:],
             )
             return result
+
+    def _decision_from_r15_gate(
+        self,
+        *,
+        legacy_decision: RemediationDecision,
+        gate: RuntimeAutoRecoveryGateResult,
+    ) -> RemediationDecision:
+        if gate.allowed_to_execute:
+            return RemediationDecision(
+                action="auto_recover",
+                fix_id=gate.selected_fix_id,
+                reason=(
+                    "Runtime gate authorized automatic recovery. "
+                    f"strategy_layer={gate.strategy_layer}; "
+                    f"selected_fix_id={gate.selected_fix_id}; "
+                    f"would_execute={gate.would_execute}."
+                ),
+                severity=legacy_decision.severity,
+                notify_owner=legacy_decision.notify_owner,
+                should_rerun=legacy_decision.should_rerun,
+                rollback_on_failure=legacy_decision.rollback_on_failure,
+            )
+
+        return self._downgrade_decision_for_r15_gate(
+            decision=legacy_decision,
+            gate=gate,
+        )
 
     def _downgrade_decision_for_r15_gate(
         self,
@@ -505,7 +542,7 @@ class AutoRecoveryRunner:
             action=action,  # type: ignore[arg-type]
             fix_id=gate.selected_fix_id or decision.fix_id,
             reason=(
-                "R15 runtime gate blocked automatic execution. "
+                "Runtime gate blocked automatic execution. "
                 f"strategy_layer={gate.strategy_layer}; "
                 f"dry_run={gate.dry_run}; "
                 f"would_execute={gate.would_execute}; "
@@ -516,6 +553,31 @@ class AutoRecoveryRunner:
             should_rerun=decision.should_rerun,
             rollback_on_failure=decision.rollback_on_failure,
         )
+
+    @staticmethod
+    def _decision_shadow(
+        *,
+        legacy_decision: RemediationDecision,
+        final_decision: RemediationDecision,
+        gate: RuntimeAutoRecoveryGateResult,
+    ) -> dict[str, Any]:
+        return {
+            "mode": "r15_runtime_gate_final_decision",
+            "legacy_action": legacy_decision.action,
+            "legacy_fix_id": legacy_decision.fix_id,
+            "legacy_is_auto_recover": legacy_decision.is_auto_recover,
+            "gate_strategy_layer": gate.strategy_layer,
+            "gate_candidate_fix_id": gate.candidate_fix_id,
+            "gate_selected_fix_id": gate.selected_fix_id,
+            "gate_allowed_to_execute": gate.allowed_to_execute,
+            "gate_downgrade_reason": gate.downgrade_reason,
+            "final_action": final_decision.action,
+            "final_fix_id": final_decision.fix_id,
+            "changed": (
+                legacy_decision.action != final_decision.action
+                or legacy_decision.fix_id != final_decision.fix_id
+            ),
+        }
 
     def _find_event_evidence_start(self, event: ErrorEvent) -> int:
         fingerprint = getattr(event, "fingerprint", "")

@@ -55,6 +55,8 @@ def make_governance_inputs() -> SafeRecoveryRegistryGovernanceInputs:
         policy_safe_event_types=set(SAFE_CANDIDATE_EVENT_TYPES),
         policy_manual_event_types=set(MANUAL_ESCALATION_EVENT_TYPES),
         remediation_fix_by_event_type=dict(RemediationPolicy.DEFAULT_FIX_MAPPING),
+        remediation_manual_event_types=set(RemediationPolicy.ALWAYS_ESCALATE_EVENT_TYPES),
+        remediation_manual_issue_types=set(RemediationPolicy.ALWAYS_ESCALATE_ISSUE_TYPES),
         runtime_event_policies=dict(runtime_policy.event_type_policies),
         precheck_specs_by_fix_id=dict(SAFE_FIX_SAFETY_SPECS),
         guarded_candidates_by_event_type={
@@ -108,6 +110,29 @@ def test_governance_validator_reports_cross_layer_drift() -> None:
     runtime_issues = validate_safe_recovery_registry_governance(runtime_drift)
 
     assert f"runtime_policy_missing:{first_spec.event_type}" in runtime_issues
+
+    detector_drift = replace(
+        base,
+        detector_issue_by_event_type={
+            **dict(base.detector_issue_by_event_type),
+            "unregistered_detector_domain": "unregistered_detector_domain",
+        },
+    )
+    detector_issues = validate_safe_recovery_registry_governance(detector_drift)
+
+    assert any(
+        issue == "detector_event_types_mismatch:extra=unregistered_detector_domain"
+        for issue in detector_issues
+    )
+
+    regression_drift = replace(
+        base,
+        regression_expected_event_types=set(base.regression_expected_event_types)
+        - {"python_env"},
+    )
+    regression_issues = validate_safe_recovery_registry_governance(regression_drift)
+
+    assert "regression_expected_case_missing:python_env" in regression_issues
 
 
 def test_governance_validator_rejects_precheck_without_runtime_registration() -> None:

@@ -42,6 +42,9 @@ class MonitorConfig:
     tail_lines: int = 200
     auto_report: bool = True
     max_events_per_run: int = 5
+    remote_watermark_enabled: bool = True
+    remote_watermark_shadow: bool = False
+    remote_log_max_bytes_per_poll: int = 20000
 
 
 @dataclass
@@ -145,6 +148,17 @@ class ProjectRegistry:
                 tail_lines=int(monitor_data.get("tail_lines", 200)),
                 auto_report=_as_bool(monitor_data.get("auto_report"), True),
                 max_events_per_run=int(monitor_data.get("max_events_per_run", 5)),
+                remote_watermark_enabled=_as_bool(
+                    monitor_data.get("remote_watermark_enabled"),
+                    True,
+                ),
+                remote_watermark_shadow=_as_bool(
+                    monitor_data.get("remote_watermark_shadow"),
+                    False,
+                ),
+                remote_log_max_bytes_per_poll=int(
+                    monitor_data.get("remote_log_max_bytes_per_poll", 20000)
+                ),
             ),
             policy=PolicyConfig(
                 auto_recover=_as_bool(policy_data.get("auto_recover"), False),

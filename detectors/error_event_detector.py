@@ -353,6 +353,40 @@ class ErrorEventDetector:
             ],
         ),
         ErrorRule(
+            event_type="config_path",
+            issue_type="config_path",
+            severity="medium",
+            summary="配置路径指向缺失或不可访问的位置",
+            patterns=[
+                r"\bconfig(?:uration)?[_ -]?path\b.*(?:missing|not found|invalid|unreachable)",
+                r"\bconfig_path\b.*(?:missing|not found|invalid|unreachable)",
+                r"\bconfigured path\b.*(?:missing|not found|invalid|unreachable)",
+            ],
+        ),
+        ErrorRule(
+            event_type="model_path",
+            issue_type="model_path",
+            severity="medium",
+            summary="模型路径、checkpoint 或权重文件缺失",
+            patterns=[
+                r"\bmodel[_ -]?path\b.*(?:missing|not found|invalid|unreachable)",
+                r"\bmodel checkpoint\b.*(?:missing|not found|unreachable)",
+                r"\bmodel weights\b.*(?:missing|not found|unreachable)",
+            ],
+        ),
+        ErrorRule(
+            event_type="sudo_required",
+            issue_type="system",
+            severity="high",
+            summary="需要 sudo/root/提权的操作，必须人工处理",
+            patterns=[
+                r"\bsudo required\b",
+                r"\brequires sudo\b",
+                r"\broot privileges required\b",
+                r"\bprivilege escalation required\b",
+            ],
+        ),
+        ErrorRule(
             event_type="config_error",
             issue_type="config",
             severity="high",

@@ -190,7 +190,7 @@ def test_r15_dry_run_gate_does_not_call_apply_or_rerun() -> None:
     assert session.apply_calls == []
     assert session.rerun_calls == 0
     assert "not_run_r15_dry_run" in session.recorded_result
-    assert "R15 forced recovery audit fields" in session.recorded_result
+    assert "Runtime gate audit fields" in session.recorded_result
     assert "r15_execution_result" in session.recorded_result
 
 
@@ -291,7 +291,7 @@ def test_manual_events_still_receive_r15_audit_fields() -> None:
     assert audit["action"] == "manual_escalation"
     assert audit["auto_recover_allowed"] is False
     assert audit["execution_result"] == "not_run_r15_gate_blocked"
-    assert "R15 forced recovery audit fields" in session.recorded_result
+    assert "Runtime gate audit fields" in session.recorded_result
 
 
 def test_local_recovery_method_requires_r15_gate_authorization() -> None:

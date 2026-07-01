@@ -1,0 +1,2 @@
+2026-06-16 12:02:11 model loader: model_path /models/current/checkpoint.pt not found
+2026-06-16 12:02:12 operator_action=review_model_artifact_location

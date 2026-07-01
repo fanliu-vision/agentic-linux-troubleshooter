@@ -19,6 +19,9 @@ projects:
     monitor:
       interval_seconds: 5
       tail_lines: 200
+      remote_watermark_enabled: true
+      remote_watermark_shadow: true
+      remote_log_max_bytes_per_poll: 20000
       auto_report: true
       max_events_per_run: 5
 

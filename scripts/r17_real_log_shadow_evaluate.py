@@ -14,9 +14,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from detectors import ErrorEvent, ErrorEventDetector
 from monitors.project_registry import PolicyConfig, ProjectConfig
-from policies import RemediationDecision, RemediationPolicy
-from policies.auto_recovery_policy import MANUAL_ESCALATION_EVENT_TYPES
-from safe_recovery.registry import SAFE_RECOVERY_EVENT_TYPES, SAFE_RECOVERY_FIX_IDS
+from policies import CompatibilityRemediationPolicy, RemediationDecision
+from safe_recovery.registry import (
+    SAFE_RECOVERY_FIX_IDS,
+    manual_event_types,
+    safe_event_types,
+)
 
 
 SCHEMA_VERSION = "r17.real_log_shadow.v1"
@@ -259,7 +262,7 @@ def normalize_expected_event_types(item: dict[str, Any]) -> list[str]:
 
 def evaluate_shadow_cases(cases: list[ShadowCase]) -> dict[str, Any]:
     detector = ErrorEventDetector()
-    policy = RemediationPolicy()
+    policy = CompatibilityRemediationPolicy()
     project = make_shadow_project()
 
     rows = []
@@ -321,8 +324,8 @@ def decision_to_row(event: ErrorEvent, decision: RemediationDecision) -> dict[st
         "matched_keywords": list(event.matched_keywords),
         "policy_action": decision.action,
         "fix_id": decision.fix_id,
-        "is_safe_domain": event.event_type in SAFE_RECOVERY_EVENT_TYPES,
-        "is_manual_domain": event.event_type in MANUAL_ESCALATION_EVENT_TYPES,
+        "is_safe_domain": event.event_type in safe_event_types(),
+        "is_manual_domain": event.event_type in manual_event_types(),
     }
 
 
@@ -339,9 +342,9 @@ def build_case_row(
     missing = sorted(expected - detected) if case.labeled else []
     cross_domain = detect_cross_domain(detected)
 
-    expected_manual = expected & MANUAL_ESCALATION_EVENT_TYPES
-    detected_safe = detected & SAFE_RECOVERY_EVENT_TYPES
-    detected_manual = detected & MANUAL_ESCALATION_EVENT_TYPES
+    expected_manual = expected & manual_event_types()
+    detected_safe = detected & safe_event_types()
+    detected_manual = detected & manual_event_types()
 
     safe_swallowed_high_risk = bool(
         case.labeled
@@ -466,7 +469,7 @@ def build_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "manual_noise_rate": ratio(manual_escalation_noise_count, manual_escalation_count),
         "safe_swallow_high_risk_rate": ratio(
             safe_swallowed_high_risk_count,
-            sum(1 for row in labeled_rows if set(row["expected_event_types"]) & MANUAL_ESCALATION_EVENT_TYPES),
+            sum(1 for row in labeled_rows if set(row["expected_event_types"]) & manual_event_types()),
         ),
     }
 

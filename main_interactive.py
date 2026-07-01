@@ -7,7 +7,10 @@ from sessions import TroubleshootingSession
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Stage-4 Interactive Linux Troubleshooting Agent"
+        description=(
+            "Legacy interactive Stage-4 Linux Troubleshooting CLI "
+            "(not the monitor/daemon entry)."
+        )
     )
     parser.add_argument(
         "--agent-depth",
@@ -202,7 +205,8 @@ def main() -> None:
     )
 
     print("=" * 100)
-    print("Stage-4 Interactive Linux Troubleshooting Agent")
+    print("Legacy interactive entry: Stage-4 Interactive Linux Troubleshooting Agent")
+    print("Historical CLI only; use main_monitor.py for monitor/daemon workflows.")
     print("=" * 100)
     print(f"session_id: {session.session_id}")
     print(f"agent_depth: {args.agent_depth}")

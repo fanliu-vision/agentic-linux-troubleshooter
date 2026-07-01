@@ -6,8 +6,15 @@ from typing import Literal
 from detectors import ErrorEvent
 from monitors.project_registry import ProjectConfig
 from safe_recovery.registry import (
-    SAFE_FIX_BY_EVENT_TYPE,
-    safe_fix_id_for_issue_type,
+    STRATEGY_MANUAL_ESCALATION,
+    STRATEGY_SAFE_AUTO_RECOVER,
+    fix_id_for_event_type,
+    fix_id_for_issue_type,
+    fix_mapping_by_event_type,
+    get_recovery_domain_spec_for_event_type,
+    manual_event_types_without_fix,
+    manual_issue_types_without_fix,
+    strategy_for_issue_type,
 )
 
 
@@ -34,7 +41,7 @@ class RemediationDecision:
 
     def to_markdown(self) -> str:
         return (
-            "## Stage 6C 自动恢复策略决策\n\n"
+            "## 自动恢复兼容策略适配器输出\n\n"
             f"- action: `{self.action}`\n"
             f"- fix_id: `{self.fix_id if self.fix_id else '<none>'}`\n"
             f"- severity: `{self.severity}`\n"
@@ -45,47 +52,19 @@ class RemediationDecision:
         )
 
 
-class RemediationPolicy:
+class CompatibilityRemediationPolicy:
     """
-    Stage 6C 自动恢复策略。
+    Compatibility adapter for the legacy remediation decision shape.
 
-    设计原则：
-    1. 只有受控配置修改才允许自动 apply；
-    2. 不执行 rm / kill / sudo / scancel / systemctl 等危险动作；
-    3. 是否真正自动修，还必须受 projects.yaml 中 policy.auto_recover 和 allow_auto_apply 控制；
-    4. 通用 Python 缺包仍默认升级；只有可选依赖降级开关可进入 safe_auto_recover。
+    This adapter keeps the old RemediationDecision evidence/report contract alive.
+    It does not decide whether execution is allowed; registry domain policy,
+    project policy overlay, and the runtime gate are the authoritative layers.
     """
 
-    DEFAULT_FIX_MAPPING = {
-        **SAFE_FIX_BY_EVENT_TYPE,
-        "python_env": "fix-python-1",
-        "model_path": "fix-model-path-1",
-        "config_path": "fix-config-path-1",
-    }
-
-    ALWAYS_ESCALATE_EVENT_TYPES = {
-        "disk_full",
-        "slurm",
-        "process_kill",
-        "process_crash",
-        "container_k8s",
-        "host_resource",
-        "network_connectivity",
-        "dependency_service",
-        "config_error",
-        "auth_cert",
-        "permission_denied",
-        "sudo_required",
-        "unknown",
-    }
-
-    ALWAYS_ESCALATE_ISSUE_TYPES = {
-        "disk",
-        "slurm",
-        "system",
-        "permission",
-        "unknown",
-    }
+    # Compatibility exports retained for one release cycle.
+    DEFAULT_FIX_MAPPING = fix_mapping_by_event_type()
+    ALWAYS_ESCALATE_EVENT_TYPES = manual_event_types_without_fix()
+    ALWAYS_ESCALATE_ISSUE_TYPES = manual_issue_types_without_fix()
 
     def decide(self, event: ErrorEvent, project: ProjectConfig) -> RemediationDecision:
         event_type = getattr(event, "event_type", "unknown")
@@ -106,22 +85,25 @@ class RemediationPolicy:
                 ),
             )
 
-        if event_type in self.ALWAYS_ESCALATE_EVENT_TYPES:
-            return RemediationDecision(
-                action="manual_escalation",
-                severity=severity,
-                should_rerun=should_rerun,
-                rollback_on_failure=rollback_on_failure,
-                reason=f"`{event_type}` 属于高风险或不可控错误，不允许自动修复。",
+        domain_spec = get_recovery_domain_spec_for_event_type(event_type)
+        if self._requires_manual_escalation_by_registry(
+            event_type=event_type,
+            issue_type=issue_type,
+        ):
+            reason = (
+                domain_spec.reason
+                if domain_spec is not None and domain_spec.reason
+                else f"`{event_type}` 属于高风险或不可控错误，不允许自动修复。"
             )
-
-        if issue_type in self.ALWAYS_ESCALATE_ISSUE_TYPES:
             return RemediationDecision(
                 action="manual_escalation",
                 severity=severity,
                 should_rerun=should_rerun,
                 rollback_on_failure=rollback_on_failure,
-                reason=f"`{issue_type}` 属于需要负责人或管理员处理的领域，不允许自动修复。",
+                reason=(
+                    f"`{event_type}` / `{issue_type}` 当前 registry 策略为 "
+                    f"`{STRATEGY_MANUAL_ESCALATION}`：{reason}"
+                ),
             )
 
         if issue_type in project.policy.escalation_required:
@@ -163,58 +145,69 @@ class RemediationPolicy:
                 ),
             )
 
-        if event_type == "python_env":
-            return RemediationDecision(
-                action="auto_recover",
-                fix_id=fix_id,
-                severity=severity,
-                should_rerun=should_rerun,
-                rollback_on_failure=rollback_on_failure,
-                reason=(
-                    "检测到 Python 环境问题，但项目已显式允许 `fix-python-1`。"
-                    "这里仅允许受控修复，例如修改配置开关、切换 requirements 中明确声明的依赖；"
-                    "不允许任意 pip install。"
-                ),
-            )
-
-        if event_type in {
-            "cache_write_failed",
-            "optional_dependency_missing",
-            "worker_overload",
-        }:
-            return RemediationDecision(
-                action="auto_recover",
-                fix_id=fix_id,
-                severity=severity,
-                should_rerun=should_rerun,
-                rollback_on_failure=rollback_on_failure,
-                reason=(
-                    f"事件 `{event_type}` 已映射到低风险配置修复 `{fix_id}`，"
-                    "仅允许修改项目内 JSON 配置字段，并且该 fix_id 已被项目策略显式允许。"
-                ),
-            )
-
         return RemediationDecision(
             action="auto_recover",
             fix_id=fix_id,
             severity=severity,
             should_rerun=should_rerun,
             rollback_on_failure=rollback_on_failure,
-            reason=(
-                f"事件 `{event_type}` 已映射到受控修复 `{fix_id}`，"
-                "且该 fix_id 已被项目策略显式允许自动执行。"
+            reason=self._auto_recover_reason(
+                event_type=event_type,
+                issue_type=issue_type,
+                fix_id=fix_id,
             ),
         )
 
     def _select_fix_id(self, event_type: str, issue_type: str) -> str:
-        if event_type in self.DEFAULT_FIX_MAPPING:
-            return self.DEFAULT_FIX_MAPPING[event_type]
+        fix_id = fix_id_for_event_type(event_type)
+        if fix_id:
+            return fix_id
 
-        safe_fix_id = safe_fix_id_for_issue_type(issue_type)
-        if safe_fix_id:
-            return safe_fix_id
+        return fix_id_for_issue_type(issue_type)
 
-        if issue_type == "python_env":
-            return "fix-python-1"
+    @staticmethod
+    def _requires_manual_escalation_by_registry(
+        *,
+        event_type: str,
+        issue_type: str,
+    ) -> bool:
+        domain_spec = get_recovery_domain_spec_for_event_type(event_type)
+        if domain_spec is not None:
+            return (
+                domain_spec.strategy_layer == STRATEGY_MANUAL_ESCALATION
+                and not domain_spec.fix_id
+            )
 
-        return ""
+        return strategy_for_issue_type(issue_type) == STRATEGY_MANUAL_ESCALATION
+
+    @staticmethod
+    def _auto_recover_reason(
+        *,
+        event_type: str,
+        issue_type: str,
+        fix_id: str,
+    ) -> str:
+        domain_spec = get_recovery_domain_spec_for_event_type(event_type)
+        if domain_spec is None:
+            return (
+                f"事件 `{event_type}` / `{issue_type}` 已映射到受控修复 `{fix_id}`，"
+                "且该 fix_id 已被项目策略显式允许自动执行。"
+            )
+
+        if domain_spec.strategy_layer == STRATEGY_SAFE_AUTO_RECOVER:
+            return (
+                f"事件 `{event_type}` 已映射到低风险配置修复 `{fix_id}`："
+                f"{domain_spec.reason}。该 fix_id 已被项目策略显式允许。"
+            )
+
+        return (
+            f"事件 `{event_type}` 当前 registry 策略为 "
+            f"`{domain_spec.strategy_layer}`，但保留 legacy fix_id `{fix_id}` "
+            "兼容路径；该 fix_id 已被项目策略显式允许。"
+        )
+
+
+# Compatibility alias retained for one release cycle. New code should refer to
+# CompatibilityRemediationPolicy when it explicitly needs the legacy evidence
+# shape; execution authority remains with the runtime gate.
+RemediationPolicy = CompatibilityRemediationPolicy

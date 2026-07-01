@@ -4,7 +4,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping
 
-from safe_recovery.registry import SAFE_RECOVERY_EVENT_TYPES
+from safe_recovery.registry import (
+    STRATEGY_SAFE_AUTO_RECOVER,
+    get_recovery_domain_spec_for_event_type,
+    manual_event_types,
+    safe_event_types,
+)
 
 
 class StrategyLayer(str, Enum):
@@ -121,22 +126,11 @@ class AutoRecoveryDecision:
     audit_required: bool = True
 
 
-SAFE_CANDIDATE_EVENT_TYPES = set(SAFE_RECOVERY_EVENT_TYPES)
+# Compatibility aliases retained for one release cycle. New code should use
+# safe_recovery.registry.safe_event_types() / manual_event_types().
+SAFE_CANDIDATE_EVENT_TYPES = set(safe_event_types())
 
-MANUAL_ESCALATION_EVENT_TYPES = {
-    "auth_cert",
-    "config_error",
-    "container_k8s",
-    "dependency_service",
-    "disk_full",
-    "host_resource",
-    "network_connectivity",
-    "permission_denied",
-    "process_crash",
-    "process_kill",
-    "python_env",
-    "slurm",
-}
+MANUAL_ESCALATION_EVENT_TYPES = set(manual_event_types())
 
 AUTO_STRATEGY_LAYERS = {
     StrategyLayer.SAFE_AUTO_RECOVER,
@@ -207,19 +201,12 @@ def resolve_policy_for_event(
         )
 
     if event_policy is None:
-        if event_type in MANUAL_ESCALATION_EVENT_TYPES:
-            strategy = StrategyLayer.MANUAL_ESCALATION
-            reason = "event_type_defaults_to_manual_escalation"
-        else:
-            strategy = normalized.unknown_event_strategy
-            reason = "unknown_event_type"
-
         return _non_auto_decision(
             event_type=event_type,
             fingerprint=fingerprint,
-            strategy_layer=strategy,
+            strategy_layer=normalized.unknown_event_strategy,
             dry_run=True,
-            downgrade_reason=reason,
+            downgrade_reason="unknown_event_type",
             audit_required=normalized.audit_required,
         )
 
@@ -230,16 +217,6 @@ def resolve_policy_for_event(
             strategy_layer=StrategyLayer.DISABLED,
             dry_run=True,
             downgrade_reason="event_type_policy_disabled",
-            audit_required=event_policy.audit_required,
-        )
-
-    if event_type in MANUAL_ESCALATION_EVENT_TYPES:
-        return _non_auto_decision(
-            event_type=event_type,
-            fingerprint=fingerprint,
-            strategy_layer=StrategyLayer.MANUAL_ESCALATION,
-            dry_run=True,
-            downgrade_reason="event_type_defaults_to_manual_escalation",
             audit_required=event_policy.audit_required,
         )
 
@@ -272,14 +249,6 @@ def resolve_policy_for_event(
             downgrade_reason="guarded_auto_recover_dry_run_only",
             audit_required=event_policy.audit_required,
             operator_required=True,
-        )
-
-    if event_type not in SAFE_CANDIDATE_EVENT_TYPES:
-        return _fallback_decision(
-            event_type=event_type,
-            fingerprint=fingerprint,
-            event_policy=event_policy,
-            reason="event_type_not_safe_auto_recover_candidate",
         )
 
     if confidence < event_policy.confidence_required:
@@ -429,6 +398,10 @@ def _validate_event_policy(
         return
 
     if event_policy.strategy_layer == StrategyLayer.SAFE_AUTO_RECOVER:
+        _validate_registry_auto_candidate(
+            event_type=event_type,
+            event_policy=event_policy,
+        )
         if not event_policy.allowed_fix_ids:
             raise PolicyValidationError(
                 f"{event_type}: safe_auto_recover requires allowed_fix_ids"
@@ -451,6 +424,10 @@ def _validate_event_policy(
             )
 
     if event_policy.strategy_layer == StrategyLayer.GUARDED_AUTO_RECOVER:
+        _validate_registry_auto_candidate(
+            event_type=event_type,
+            event_policy=event_policy,
+        )
         if not _effective_dry_run(policy, event_policy):
             raise PolicyValidationError(
                 f"{event_type}: guarded_auto_recover must default to dry-run"
@@ -459,6 +436,30 @@ def _validate_event_policy(
             raise PolicyValidationError(
                 f"{event_type}: recovery candidates require audit"
             )
+
+
+def _validate_registry_auto_candidate(
+    *,
+    event_type: str,
+    event_policy: EventTypePolicy,
+) -> None:
+    domain_spec = get_recovery_domain_spec_for_event_type(event_type)
+    if domain_spec is None:
+        raise PolicyValidationError(
+            f"{event_type}: automatic recovery requires registry domain"
+        )
+
+    if domain_spec.strategy_layer != STRATEGY_SAFE_AUTO_RECOVER:
+        raise PolicyValidationError(
+            f"{event_type}: automatic recovery requires registry safe_auto_recover"
+        )
+
+    if event_policy.allowed_fix_ids != [domain_spec.fix_id]:
+        actual = ",".join(event_policy.allowed_fix_ids)
+        raise PolicyValidationError(
+            f"{event_type}: automatic recovery fix_id must match registry "
+            f"{domain_spec.fix_id}; actual={actual}"
+        )
 
 
 def _coerce_strategy_layer(value: StrategyLayer | str, field_name: str) -> StrategyLayer:

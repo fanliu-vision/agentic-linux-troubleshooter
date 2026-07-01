@@ -38,6 +38,7 @@ class ProjectMonitorState:
 
     seen_fingerprints: list[str] = field(default_factory=list)
     runtime_health: dict[str, Any] = field(default_factory=dict)
+    remote_log_watermarks: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +62,7 @@ class ProjectMonitorState:
             "last_report_path": self.last_report_path,
             "seen_fingerprints": self.seen_fingerprints,
             "runtime_health": self.runtime_health,
+            "remote_log_watermarks": self.remote_log_watermarks,
         }
 
     @classmethod
@@ -92,6 +94,16 @@ class ProjectMonitorState:
             state.runtime_health = dict(raw_runtime_health)
         else:
             state.runtime_health = {}
+
+        raw_remote_log_watermarks = data.get("remote_log_watermarks") or {}
+        if isinstance(raw_remote_log_watermarks, dict):
+            state.remote_log_watermarks = {
+                str(path): dict(watermark)
+                for path, watermark in raw_remote_log_watermarks.items()
+                if isinstance(watermark, dict)
+            }
+        else:
+            state.remote_log_watermarks = {}
 
         return state
 

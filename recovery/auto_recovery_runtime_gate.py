@@ -24,7 +24,12 @@ from recovery.guarded_auto_recover_dry_run import FORBIDDEN_ACTIONS
 from safe_recovery.registry import (
     SAFE_ACTION_DESCRIPTIONS,
     SAFE_FIX_BY_EVENT_TYPE,
-    iter_safe_recovery_specs,
+    STRATEGY_DIAGNOSE_ONLY,
+    STRATEGY_MANUAL_ESCALATION,
+    STRATEGY_SAFE_AUTO_RECOVER,
+    RecoveryDomainSpec,
+    fix_id_for_event_type,
+    iter_recovery_domain_specs,
 )
 
 
@@ -86,25 +91,11 @@ def build_runtime_auto_recovery_policy(project: ProjectConfig) -> AutoRecoveryPo
         unknown_event_strategy=StrategyLayer.DIAGNOSE_ONLY,
         dry_run_default=dry_run_default,
         event_type_policies={
-            **{
-                spec.event_type: _safe_policy(
-                    spec.fix_id,
-                    dry_run=dry_run_default,
-                )
-                for spec in iter_safe_recovery_specs()
-            },
-            "process_crash": _manual_policy(),
-            "container_k8s": _manual_policy(),
-            "disk_full": _manual_policy(),
-            "python_env": _manual_policy(),
-            "auth_cert": _manual_policy(),
-            "slurm": _manual_policy(),
-            "dependency_service": _manual_policy(),
-            "host_resource": _manual_policy(),
-            "network_connectivity": _manual_policy(),
-            "config_error": _manual_policy(),
-            "permission_denied": _manual_policy(),
-            "process_kill": _manual_policy(),
+            spec.event_type: _policy_for_domain(
+                spec,
+                dry_run=dry_run_default,
+            )
+            for spec in iter_recovery_domain_specs()
         },
         action_allowlist={
             fix_id: {"source": "project.policy.allow_auto_apply"}
@@ -125,7 +116,7 @@ def evaluate_runtime_auto_recovery_gate(
     if not getattr(project.policy, "auto_recovery_policy_enabled", True):
         return _blocked_result(
             event=event,
-            candidate_fix_id=remediation_decision.fix_id or "",
+            candidate_fix_id=_candidate_fix_id_for_event(event),
             strategy_layer=StrategyLayer.DISABLED,
             downgrade_reason="r15_policy_disabled",
             precheck_result={"passed": False, "reason": "r15_policy_disabled"},
@@ -134,7 +125,7 @@ def evaluate_runtime_auto_recovery_gate(
             policy_decision=None,
         )
 
-    candidate_fix_id = remediation_decision.fix_id or ""
+    candidate_fix_id = _candidate_fix_id_for_event(event)
 
     try:
         policy = build_runtime_auto_recovery_policy(project)
@@ -160,7 +151,6 @@ def evaluate_runtime_auto_recovery_gate(
     precheck_result = _run_precheck(
         event=event,
         project=project,
-        remediation_decision=remediation_decision,
         policy_decision=policy_decision,
     )
     cooldown_result = cooldown_result or _default_cooldown_result()
@@ -255,10 +245,10 @@ def _safe_policy(fix_id: str, *, dry_run: bool) -> EventTypePolicy:
     )
 
 
-def _manual_policy() -> EventTypePolicy:
+def _manual_policy(*, risk_level: RiskLevel | str = RiskLevel.HIGH) -> EventTypePolicy:
     return EventTypePolicy(
         strategy_layer=StrategyLayer.MANUAL_ESCALATION,
-        risk_level=RiskLevel.HIGH,
+        risk_level=risk_level,
         allowed_fix_ids=[],
         require_operator_confirmation=True,
         audit_required=True,
@@ -266,11 +256,41 @@ def _manual_policy() -> EventTypePolicy:
     )
 
 
+def _diagnose_policy(
+    *,
+    risk_level: RiskLevel | str = RiskLevel.MEDIUM,
+) -> EventTypePolicy:
+    return EventTypePolicy(
+        strategy_layer=StrategyLayer.DIAGNOSE_ONLY,
+        risk_level=risk_level,
+        allowed_fix_ids=[],
+        require_operator_confirmation=False,
+        audit_required=True,
+        fallback_strategy=StrategyLayer.MANUAL_ESCALATION,
+    )
+
+
+def _policy_for_domain(
+    spec: RecoveryDomainSpec,
+    *,
+    dry_run: bool,
+) -> EventTypePolicy:
+    if spec.strategy_layer == STRATEGY_SAFE_AUTO_RECOVER:
+        return _safe_policy(spec.fix_id, dry_run=dry_run)
+
+    if spec.strategy_layer == STRATEGY_MANUAL_ESCALATION:
+        return _manual_policy(risk_level=spec.risk_level)
+
+    if spec.strategy_layer == STRATEGY_DIAGNOSE_ONLY:
+        return _diagnose_policy(risk_level=spec.risk_level)
+
+    return _manual_policy(risk_level=RiskLevel.UNKNOWN)
+
+
 def _run_precheck(
     *,
     event: ErrorEvent,
     project: ProjectConfig,
-    remediation_decision: RemediationDecision,
     policy_decision: AutoRecoveryDecision,
 ) -> dict[str, Any]:
     expected_fix_id = SAFE_FIX_BY_EVENT_TYPE.get(event.event_type, "")
@@ -285,8 +305,8 @@ def _run_precheck(
     if not project.policy.auto_recover:
         reasons.append("project_auto_recover_disabled")
 
-    if not remediation_decision.is_auto_recover:
-        reasons.append("legacy_policy_did_not_allow_auto_recover")
+    if event.issue_type in project.policy.escalation_required:
+        reasons.append("project_escalation_required")
 
     if expected_fix_id and selected_fix_id != expected_fix_id:
         reasons.append("target_fix_mismatch")
@@ -300,7 +320,6 @@ def _run_precheck(
     if _matches_forbidden_text(
         [
             selected_fix_id,
-            remediation_decision.reason,
             ACTION_DESCRIPTIONS.get(selected_fix_id, ""),
         ]
     ):
@@ -339,6 +358,10 @@ def _run_precheck(
         }
     )
     return precheck
+
+
+def _candidate_fix_id_for_event(event: ErrorEvent) -> str:
+    return fix_id_for_event_type(getattr(event, "event_type", ""))
 
 
 def _default_cooldown_result() -> dict[str, Any]:

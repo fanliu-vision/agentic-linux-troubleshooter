@@ -14,7 +14,10 @@ from fixers.apply_executor import SafeApplyExecutor
 from fixers.remote_apply_executor import RemoteSafeApplyExecutor
 from monitors.project_registry import PolicyConfig, ProjectConfig
 from policies import RemediationPolicy
-from policies.auto_recovery_policy import SAFE_CANDIDATE_EVENT_TYPES
+from policies.auto_recovery_policy import (
+    MANUAL_ESCALATION_EVENT_TYPES,
+    SAFE_CANDIDATE_EVENT_TYPES,
+)
 from recovery.auto_recovery_runtime_controls import SAFE_FIX_SAFETY_SPECS
 from recovery.auto_recovery_runtime_gate import (
     ACTION_DESCRIPTIONS,
@@ -23,12 +26,20 @@ from recovery.auto_recovery_runtime_gate import (
 )
 from recovery.guarded_auto_recover_dry_run import GUARDED_DRY_RUN_CANDIDATES
 from safe_recovery.registry import (
+    DIAGNOSE_ONLY_EVENT_TYPES,
+    MANUAL_ESCALATION_EVENT_TYPES as REGISTRY_MANUAL_ESCALATION_EVENT_TYPES,
+    RECOVERY_DOMAIN_EVENT_TYPES,
     SAFE_ACTION_DESCRIPTIONS,
+    SAFE_CANDIDATE_EVENT_TYPES as REGISTRY_SAFE_CANDIDATE_EVENT_TYPES,
     SAFE_RECOVERY_EVENT_TYPES,
     SAFE_RECOVERY_FIX_IDS,
     SAFE_RECOVERY_SPECS_BY_FIX_ID,
+    fix_id_for_event_type,
+    get_recovery_domain_spec_for_event_type,
     SafeRecoverySpec,
+    iter_recovery_domain_specs,
     iter_safe_recovery_specs,
+    strategy_for_event_type,
 )
 
 
@@ -75,6 +86,66 @@ def test_safe_recovery_registry_is_the_single_safe_candidate_source() -> None:
     assert SAFE_FIX_SAFETY_SPECS == SAFE_RECOVERY_SPECS_BY_FIX_ID
 
 
+def test_domain_policy_registry_exports_safe_manual_and_diagnose_sources() -> None:
+    domain_event_types = [
+        spec.event_type for spec in iter_recovery_domain_specs()
+    ]
+    assert len(domain_event_types) == len(set(domain_event_types))
+    assert not (
+        REGISTRY_SAFE_CANDIDATE_EVENT_TYPES
+        & REGISTRY_MANUAL_ESCALATION_EVENT_TYPES
+    )
+    assert not (REGISTRY_SAFE_CANDIDATE_EVENT_TYPES & DIAGNOSE_ONLY_EVENT_TYPES)
+    assert not (REGISTRY_MANUAL_ESCALATION_EVENT_TYPES & DIAGNOSE_ONLY_EVENT_TYPES)
+
+    assert SAFE_CANDIDATE_EVENT_TYPES == set(REGISTRY_SAFE_CANDIDATE_EVENT_TYPES)
+    assert MANUAL_ESCALATION_EVENT_TYPES == set(
+        REGISTRY_MANUAL_ESCALATION_EVENT_TYPES
+    )
+    assert REGISTRY_SAFE_CANDIDATE_EVENT_TYPES == SAFE_RECOVERY_EVENT_TYPES
+
+    assert "python_env" in REGISTRY_MANUAL_ESCALATION_EVENT_TYPES
+    assert strategy_for_event_type("python_env") == "manual_escalation"
+    assert fix_id_for_event_type("python_env") == "fix-python-1"
+    assert get_recovery_domain_spec_for_event_type("python_env").operator_required
+
+    assert "disk_full" in REGISTRY_MANUAL_ESCALATION_EVENT_TYPES
+    assert strategy_for_event_type("disk_full") == "manual_escalation"
+    assert fix_id_for_event_type("disk_full") == ""
+
+    assert "config_path" in DIAGNOSE_ONLY_EVENT_TYPES
+    assert strategy_for_event_type("config_path") == "diagnose_only"
+    assert fix_id_for_event_type("config_path") == "fix-config-path-1"
+
+    assert strategy_for_event_type("unknown_future_domain") == "unregistered"
+    assert fix_id_for_event_type("unknown_future_domain") == ""
+
+
+def test_legacy_remediation_policy_constants_are_registry_derived() -> None:
+    domain_specs = list(iter_recovery_domain_specs())
+    expected_fix_mapping = {
+        spec.event_type: spec.fix_id
+        for spec in domain_specs
+        if spec.fix_id
+    }
+    expected_manual_events = {
+        spec.event_type
+        for spec in domain_specs
+        if spec.strategy_layer == "manual_escalation" and not spec.fix_id
+    }
+    expected_manual_issues = {
+        spec.issue_type
+        for spec in domain_specs
+        if spec.strategy_layer == "manual_escalation" and not spec.fix_id
+    }
+
+    assert RemediationPolicy.DEFAULT_FIX_MAPPING == expected_fix_mapping
+    assert RemediationPolicy.ALWAYS_ESCALATE_EVENT_TYPES == expected_manual_events
+    assert RemediationPolicy.ALWAYS_ESCALATE_ISSUE_TYPES == expected_manual_issues
+    assert RemediationPolicy.DEFAULT_FIX_MAPPING["python_env"] == "fix-python-1"
+    assert "python_env" not in RemediationPolicy.ALWAYS_ESCALATE_EVENT_TYPES
+
+
 def test_runtime_policy_and_legacy_mapping_cover_every_registry_spec() -> None:
     runtime_policy = build_runtime_auto_recovery_policy(make_project())
 
@@ -84,6 +155,32 @@ def test_runtime_policy_and_legacy_mapping_cover_every_registry_spec() -> None:
         assert event_policy.require_precheck
         assert event_policy.require_rollback
         assert RemediationPolicy.DEFAULT_FIX_MAPPING[spec.event_type] == spec.fix_id
+
+
+def test_runtime_policy_is_generated_for_every_registry_domain() -> None:
+    runtime_policy = build_runtime_auto_recovery_policy(make_project())
+
+    assert set(runtime_policy.event_type_policies) == set(RECOVERY_DOMAIN_EVENT_TYPES)
+
+    for spec in iter_recovery_domain_specs():
+        event_policy = runtime_policy.event_type_policies[spec.event_type]
+        strategy = getattr(event_policy.strategy_layer, "value", event_policy.strategy_layer)
+        if spec.strategy_layer == "safe_auto_recover":
+            assert strategy == "safe_auto_recover"
+            assert event_policy.allowed_fix_ids == [spec.fix_id]
+            assert event_policy.require_precheck is True
+            assert event_policy.require_rollback is True
+            assert event_policy.require_operator_confirmation is False
+        elif spec.strategy_layer == "manual_escalation":
+            assert strategy == "manual_escalation"
+            assert event_policy.allowed_fix_ids == []
+            assert event_policy.require_operator_confirmation is True
+        elif spec.strategy_layer == "diagnose_only":
+            assert strategy == "diagnose_only"
+            assert event_policy.allowed_fix_ids == []
+            assert event_policy.require_operator_confirmation is False
+        else:
+            raise AssertionError(f"unexpected strategy: {spec.strategy_layer}")
 
 
 def test_local_and_remote_executors_advertise_all_registry_safe_fixes() -> None:

@@ -176,8 +176,7 @@ def build_cycle_summary(
         "missed_detection_count": 0 if not missing_items else len(missing_items),
         "downgrade_count": manual_escalation_count
         + diagnose_only_count
-        + forbidden_blocked_count
-        + (1 if shadow_summary.get("unknown_fix_downgrades") is True else 0),
+        + forbidden_blocked_count,
         "missing_items": missing_items,
         "summary_path": str(
             cycle_dir / "R16_SAFE_RECOVERY_DOMAIN_VALIDATION_SUMMARY.md"

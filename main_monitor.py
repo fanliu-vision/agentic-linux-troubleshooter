@@ -1,16 +1,16 @@
+"""Official monitor and daemon entry point for the project."""
+
 from __future__ import annotations
 
 import argparse
 import signal
-
-import argparse
 
 from monitors import MonitorLoop, ProjectRegistry
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Stage 6 Linux Project Monitor & Auto-Recovery Agent"
+        description="Official Stage 6 Linux Project Monitor & Auto-Recovery Agent entry"
     )
     parser.add_argument(
         "--config",

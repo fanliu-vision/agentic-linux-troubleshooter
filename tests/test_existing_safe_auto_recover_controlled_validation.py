@@ -17,17 +17,17 @@ from policies.auto_recovery_policy_dry_run import (
     load_policy_schema,
     run_policy_dry_run,
 )
-from policies.remediation_policy import RemediationPolicy
 from recovery.guarded_auto_recover_dry_run import (
     evaluate_guarded_auto_recover_dry_run,
 )
+from safe_recovery.registry import safe_fix_id_for_event_type
 
 
 EXAMPLE_POLICY_PATH = (
     PROJECT_ROOT / "docs" / "examples" / "r15_policy_schema_example.yaml"
 )
 EXISTING_NETWORK_FIX_ID = "fix-network-1"
-EXISTING_GPU_FIX_ID = RemediationPolicy.DEFAULT_FIX_MAPPING["gpu_oom"]
+EXISTING_GPU_FIX_ID = safe_fix_id_for_event_type("gpu_oom")
 
 
 def load_policy() -> dict[str, object]:

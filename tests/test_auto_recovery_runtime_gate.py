@@ -154,7 +154,7 @@ def test_runtime_gate_blocks_python_env_even_when_legacy_policy_allows_it() -> N
     assert not result.auto_recover_allowed
     assert not result.allowed_to_execute
     assert result.strategy_layer == "manual_escalation"
-    assert result.downgrade_reason == "event_type_defaults_to_manual_escalation"
+    assert result.downgrade_reason == "event_type_policy_manual_escalation"
 
 
 def test_runtime_gate_requires_rollback_for_live_execution() -> None:

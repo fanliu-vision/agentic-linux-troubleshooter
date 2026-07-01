@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping
 
-from safe_recovery.registry import SAFE_FIX_BY_EVENT_TYPE
+from safe_recovery.registry import (
+    SAFE_FIX_BY_EVENT_TYPE,
+    manual_event_types,
+)
 
 
 FORBIDDEN_ACTIONS = [
@@ -26,14 +29,6 @@ FORBIDDEN_ACTIONS = [
     "privilege escalation",
     "跨主机破坏性操作",
 ]
-
-MANUAL_ESCALATION_EVENT_TYPES = {
-    "auth_cert",
-    "container_k8s",
-    "disk_full",
-    "process_crash",
-    "python_env",
-}
 
 GUARDED_DRY_RUN_CANDIDATES = {
     event_type: {fix_id}
@@ -107,7 +102,7 @@ def evaluate_guarded_auto_recover_dry_run(
     if forbidden_hit:
         final_strategy_layer = "disabled"
         downgrade_reason = "forbidden_action"
-    elif event_type in MANUAL_ESCALATION_EVENT_TYPES:
+    elif event_type in manual_event_types():
         final_strategy_layer = "manual_escalation"
         downgrade_reason = "event_type_requires_manual_escalation"
     elif event_type not in GUARDED_DRY_RUN_CANDIDATES:

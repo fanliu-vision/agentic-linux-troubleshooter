@@ -14,7 +14,6 @@ import recovery.auto_recovery_runtime_controls as runtime_controls
 from detectors import ErrorEvent
 from monitors.project_registry import PolicyConfig, ProjectConfig, ProjectRegistry
 from policies import RemediationDecision, RemediationPolicy
-from policies.auto_recovery_policy import MANUAL_ESCALATION_EVENT_TYPES
 from recovery.auto_recovery_runner import AutoRecoveryRunner
 from recovery.auto_recovery_runtime_gate import (
     build_runtime_auto_recovery_policy,
@@ -24,7 +23,11 @@ from recovery.guarded_auto_recover_dry_run import (
     FORBIDDEN_ACTIONS,
     evaluate_guarded_auto_recover_dry_run,
 )
-from safe_recovery.registry import SAFE_RECOVERY_FIX_IDS, iter_safe_recovery_specs
+from safe_recovery.registry import (
+    SAFE_RECOVERY_FIX_IDS,
+    iter_safe_recovery_specs,
+    manual_event_types,
+)
 from safe_recovery.semantics import (
     SEMANTIC_DISABLE_BOOL,
     SEMANTIC_LOWER_INT,
@@ -368,7 +371,7 @@ def test_forbidden_actions_block_every_safe_domain_candidate(
     assert result.audit_record["forbidden_action"] == forbidden_action
 
 
-def test_unknown_fix_id_downgrades_before_execution(tmp_path: Path) -> None:
+def test_registry_fix_id_overrides_unknown_legacy_fix_id(tmp_path: Path) -> None:
     spec = iter_safe_recovery_specs()[0]
     project = make_project(
         tmp_path,
@@ -391,14 +394,13 @@ def test_unknown_fix_id_downgrades_before_execution(tmp_path: Path) -> None:
         remediation_decision=decision,
     )
 
-    assert gate.auto_recover_allowed is False
-    assert gate.allowed_to_execute is False
-    assert gate.would_execute is False
-    assert gate.selected_fix_id == ""
-    assert gate.downgrade_reason == "candidate_fix_id_not_allowed_for_event_type"
+    assert gate.candidate_fix_id == spec.fix_id
+    assert gate.selected_fix_id == spec.fix_id
+    assert gate.auto_recover_allowed is True
+    assert gate.downgrade_reason != "candidate_fix_id_not_allowed_for_event_type"
 
 
-@pytest.mark.parametrize("event_type", sorted(MANUAL_ESCALATION_EVENT_TYPES))
+@pytest.mark.parametrize("event_type", sorted(manual_event_types()))
 def test_high_risk_event_types_remain_manual_or_diagnose(
     tmp_path: Path,
     event_type: str,

@@ -1,0 +1,2 @@
+2026-06-16 12:02:01 service config: config_path /srv/acme/missing-config.json not found
+2026-06-16 12:02:02 operator_action=review_configuration_path

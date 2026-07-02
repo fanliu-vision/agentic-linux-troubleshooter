@@ -118,6 +118,13 @@ button.danger {
   color: var(--red);
 }
 
+button.danger.primary-danger,
+button.danger.primary-danger:hover {
+  border-color: var(--red);
+  background: var(--red);
+  color: #ffffff;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -139,6 +146,110 @@ textarea {
   min-height: 76px;
   padding: 9px 10px;
   resize: vertical;
+}
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(23, 32, 42, 0.5);
+}
+
+.confirm-dialog {
+  display: grid;
+  gap: 16px;
+  width: min(620px, 100%);
+  max-height: min(760px, calc(100vh - 40px));
+  overflow: auto;
+  border: 1px solid #ddb5b5;
+  border-radius: 8px;
+  padding: 18px;
+  background: var(--panel);
+  box-shadow: 0 24px 70px rgba(23, 32, 42, 0.24);
+}
+
+.confirm-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.confirm-head h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.confirm-risk-badge {
+  flex: 0 0 auto;
+  min-height: 28px;
+  border: 1px solid #e7b9b9;
+  border-radius: 999px;
+  padding: 4px 10px;
+  color: var(--red);
+  background: #fff1f1;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.confirm-facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  margin: 0;
+}
+
+.confirm-facts div {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.28fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-soft);
+}
+
+.confirm-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.confirm-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.confirm-word-field {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.confirm-word-field input {
+  min-height: 38px;
+}
+
+.confirm-warning {
+  min-height: 18px;
+  margin: 0;
+  color: var(--red);
+  font-size: 13px;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .app-shell {
@@ -483,6 +594,16 @@ textarea {
 
 .history-edits-table {
   min-width: 760px;
+}
+
+.history-change,
+.history-artifact {
+  overflow-wrap: anywhere;
+}
+
+.history-artifact {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .history-backup {

@@ -8,7 +8,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from monitors.report_index_store import ReportIndexStore
 from monitors.trace_store import APPROVAL_STATUS_APPROVED
@@ -45,6 +45,16 @@ def _read_json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     if not raw:
         return {}
     return json.loads(raw.decode("utf-8"))
+
+
+def _int_query(query: dict[str, list[str]], key: str, default: int) -> int:
+    values = query.get(key) or []
+    if not values:
+        return default
+    try:
+        return max(0, int(values[0]))
+    except (TypeError, ValueError):
+        return default
 
 
 class TraceUiRequestHandler(BaseHTTPRequestHandler):
@@ -189,6 +199,8 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_api_get(self, path: str) -> None:
         parts = [item for item in path.split("/") if item]
+        query = parse_qs(urlparse(self.path).query)
+        offset = _int_query(query, "offset", 0)
 
         try:
             if parts == ["api", "auth", "status"]:
@@ -227,7 +239,12 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
 
             if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "jobs":
                 project_id = parts[2]
-                self._send_json(self._runtime_service(project_id).jobs())
+                self._send_json(
+                    self._runtime_service(project_id).jobs(
+                        limit=_int_query(query, "limit", 20),
+                        offset=offset,
+                    )
+                )
                 return
 
             if (
@@ -262,7 +279,10 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                     {
                         "project_id": project_id,
                         "report_index_path": str(store.report_index_path),
-                        "reports": store.reports(limit=100),
+                        "reports": store.reports(
+                            limit=_int_query(query, "limit", 100),
+                            offset=offset,
+                        ),
                     }
                 )
                 return
@@ -279,7 +299,12 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                 and parts[3] == "recovery-history"
             ):
                 project_id = parts[2]
-                self._send_json(self._recovery_history_service(project_id).history(limit=100))
+                self._send_json(
+                    self._recovery_history_service(project_id).history(
+                        limit=_int_query(query, "limit", 100),
+                        offset=offset,
+                    )
+                )
                 return
 
             self._send_json(
@@ -370,7 +395,7 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                             "error": "confirmation_required",
                             "action": action,
                         },
-                        status=HTTPStatus.PRECONDITION_REQUIRED,
+                        status=HTTPStatus.PRECONDITION_FAILED,
                     )
                     return
                 self._send_json(
@@ -404,7 +429,7 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                                 "error": "confirmation_required",
                                 "action": "job_retry",
                             },
-                            status=HTTPStatus.PRECONDITION_REQUIRED,
+                            status=HTTPStatus.PRECONDITION_FAILED,
                         )
                         return
                     job = store.retry(job_id, operator=operator)
@@ -430,7 +455,7 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                             "error": "confirmation_required",
                             "action": "recovery_history_rollback",
                         },
-                        status=HTTPStatus.PRECONDITION_REQUIRED,
+                        status=HTTPStatus.PRECONDITION_FAILED,
                     )
                     return
                 self._send_json(
@@ -456,7 +481,7 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                             "error": "confirmation_required",
                             "action": confirmation_action,
                         },
-                        status=HTTPStatus.PRECONDITION_REQUIRED,
+                        status=HTTPStatus.PRECONDITION_FAILED,
                     )
                     return
                 service = self._service(project_id)

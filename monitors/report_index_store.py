@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from monitors.jsonl_store import append_jsonl, read_jsonl, rewrite_jsonl
+
 
 REPORT_INDEX_SCHEMA_VERSION = "report_index.v1"
 REPORT_RECORD = "report"
@@ -39,18 +41,6 @@ def _jsonable(data: Any) -> Any:
         return data
     except TypeError:
         return json.loads(json.dumps(data, ensure_ascii=False, default=str))
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-
-    records: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        records.append(json.loads(line))
-    return records
 
 
 def _sort_key(record: dict[str, Any]) -> tuple[str, str]:
@@ -203,10 +193,26 @@ class ReportIndexStore:
             metadata=metadata,
         )
 
-    def read_all(self) -> list[dict[str, Any]]:
-        return _read_jsonl(self.report_index_path)
+    def read_all(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        reverse: bool = False,
+    ) -> list[dict[str, Any]]:
+        return read_jsonl(
+            self.report_index_path,
+            limit=limit,
+            offset=offset,
+            reverse=reverse,
+        )
 
-    def reports(self, *, limit: int | None = None) -> list[dict[str, Any]]:
+    def reports(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         latest: dict[str, dict[str, Any]] = {}
         for record in self.read_all():
             report_id = str(record.get("report_id", ""))
@@ -215,6 +221,8 @@ class ReportIndexStore:
             latest[report_id] = record
 
         rows = sorted(latest.values(), key=_sort_key, reverse=True)
+        if offset:
+            rows = rows[max(0, int(offset)) :]
         if limit is not None:
             return rows[: max(0, int(limit))]
         return rows
@@ -271,8 +279,12 @@ class ReportIndexStore:
         }
 
     def _append(self, record: dict[str, Any]) -> None:
-        with self.report_index_path.open("a", encoding="utf-8") as f:
-            f.write(_json_dumps(record) + "\n")
+        append_jsonl(self.report_index_path, record)
+
+    def compact(self) -> list[dict[str, Any]]:
+        records = self.reports()
+        rewrite_jsonl(self.report_index_path, list(reversed(records)))
+        return records
 
     def _generated_report_path(
         self,

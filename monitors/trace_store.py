@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from monitors.jsonl_store import append_jsonl, read_jsonl, rewrite_jsonl
 from safe_recovery.registry import SAFE_FIX_BY_EVENT_TYPE, fix_id_for_event_type
 
 
@@ -128,20 +129,29 @@ class TraceStore:
             "payload": _jsonable(dict(payload or {})),
         }
 
-        with self.trace_events_path.open("a", encoding="utf-8") as f:
-            f.write(_json_dumps(record) + "\n")
+        append_jsonl(self.trace_events_path, record)
 
         return record
 
-    def read_all(self) -> list[dict[str, Any]]:
-        if not self.trace_events_path.exists():
-            return []
+    def read_all(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        reverse: bool = False,
+    ) -> list[dict[str, Any]]:
+        return read_jsonl(
+            self.trace_events_path,
+            limit=limit,
+            offset=offset,
+            reverse=reverse,
+        )
 
-        records: list[dict[str, Any]] = []
-        for line in self.trace_events_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            records.append(json.loads(line))
+    def compact(self, *, keep_latest: int | None = None) -> list[dict[str, Any]]:
+        records = self.read_all()
+        if keep_latest is not None:
+            records = records[-max(0, int(keep_latest)) :]
+        rewrite_jsonl(self.trace_events_path, records)
         return records
 
 
@@ -346,16 +356,19 @@ class ApprovalStore:
         self._append(record)
         return record
 
-    def read_all(self) -> list[dict[str, Any]]:
-        if not self.approval_requests_path.exists():
-            return []
-
-        records: list[dict[str, Any]] = []
-        for line in self.approval_requests_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            records.append(json.loads(line))
-        return records
+    def read_all(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        reverse: bool = False,
+    ) -> list[dict[str, Any]]:
+        return read_jsonl(
+            self.approval_requests_path,
+            limit=limit,
+            offset=offset,
+            reverse=reverse,
+        )
 
     def current_status(self, request_id: str) -> str:
         record = self.latest_record(request_id)
@@ -374,8 +387,14 @@ class ApprovalStore:
         return records[-1]
 
     def _append(self, record: dict[str, Any]) -> None:
-        with self.approval_requests_path.open("a", encoding="utf-8") as f:
-            f.write(_json_dumps(record) + "\n")
+        append_jsonl(self.approval_requests_path, record)
+
+    def compact(self, *, keep_latest: int | None = None) -> list[dict[str, Any]]:
+        records = self.read_all()
+        if keep_latest is not None:
+            records = records[-max(0, int(keep_latest)) :]
+        rewrite_jsonl(self.approval_requests_path, records)
+        return records
 
     def _request_by_id(self, request_id: str) -> dict[str, Any]:
         for record in self.read_all():

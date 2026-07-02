@@ -64,7 +64,7 @@
             </dl>
           </section>
           <section class="console-card">
-            <h3>最新事件</h3>
+            <h3>待处理事件</h3>
             <div id="consoleLatestEvents" class="console-list"></div>
           </section>
           <section class="console-card">
@@ -177,7 +177,7 @@
           <button id="refreshHistoryButton" type="button">刷新历史</button>
         </div>
         <div id="recoveryHistoryList" class="history-list"></div>
-        <p id="recoveryHistoryEmpty" class="muted hidden">暂无恢复历史</p>
+        <p id="recoveryHistoryEmpty" class="muted hidden">暂无恢复历史，可先执行 dry-run 恢复生成可审计记录</p>
       </section>
 
       <main class="workspace">
@@ -283,7 +283,7 @@
                   <button id="refreshReportsButton" type="button">刷新报告</button>
                 </div>
                 <div id="reportGroups" class="report-groups"></div>
-                <p id="reportEmpty" class="muted hidden">暂无关联报告</p>
+                <p id="reportEmpty" class="muted hidden">暂无关联报告，可先生成报告建立事件基线</p>
               </section>
 
               <section id="reportDetailBox" class="detail-section report-detail hidden">
@@ -308,6 +308,49 @@
         </section>
       </main>
     </div>
+
+    <section id="confirmOverlay" class="confirm-overlay hidden" aria-label="高风险操作确认">
+      <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <div class="confirm-head">
+          <div>
+            <h2 id="confirmTitle">确认高风险操作</h2>
+            <p id="confirmSubtitle" class="muted"></p>
+          </div>
+          <span id="confirmRiskBadge" class="confirm-risk-badge">高风险</span>
+        </div>
+        <dl class="confirm-facts">
+          <div>
+            <dt>操作</dt>
+            <dd id="confirmActionLabel">-</dd>
+          </div>
+          <div>
+            <dt>项目</dt>
+            <dd id="confirmProject">-</dd>
+          </div>
+          <div>
+            <dt>操作员</dt>
+            <dd id="confirmOperator">-</dd>
+          </div>
+          <div>
+            <dt>request / job</dt>
+            <dd id="confirmRequestId">-</dd>
+          </div>
+          <div>
+            <dt>影响范围</dt>
+            <dd id="confirmImpact">-</dd>
+          </div>
+        </dl>
+        <label class="confirm-word-field">
+          <span id="confirmWordLabel">输入确认词</span>
+          <input id="confirmWordInput" type="text" autocomplete="off">
+        </label>
+        <p id="confirmWarning" class="confirm-warning"></p>
+        <div class="confirm-actions">
+          <button id="confirmCancelButton" type="button">取消</button>
+          <button id="confirmSubmitButton" class="danger" type="button">确认执行</button>
+        </div>
+      </div>
+    </section>
 
     <script src="/app.js"></script>
   </body>

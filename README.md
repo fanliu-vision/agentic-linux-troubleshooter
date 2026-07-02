@@ -222,6 +222,45 @@ journalctl -u agentic-monitor@enterprise_demo_local.service -f
 
 如已配置 LLM API Key，可使用 `--report-mode llm` 或 `--report-mode auto`。不要把 API Key 写入代码或提交到 Git。
 
+### Trace UI 控制台
+
+Trace UI 用于查看项目运行状态、事件证据、审批请求、job 日志、恢复历史和报告预览。默认监听 `127.0.0.1:8765`，并启动内嵌 worker 处理 UI 入队的 job。
+
+本地带鉴权启动：
+
+```bash
+export AGENTIC_TRACE_UI_TOKEN="<set-a-local-token>"
+
+.venv/bin/python -m web_ui.server \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --config configs/projects.yaml \
+  --state-dir state \
+  --output-root outputs/monitors
+```
+
+浏览器访问 `http://127.0.0.1:8765`，登录时输入启动前设置的 `AGENTIC_TRACE_UI_TOKEN`。UI 会创建登录会话并使用 CSRF token 保护非 GET 请求；`--disable-auth` 只适合本机临时开发。
+
+Worker 模式：
+
+- 默认模式：不传 `--disable-worker`，UI server 会启动内嵌 worker，处理 `generate_report`、`dry_run_recovery`、`approved_recovery_job`、`live_apply`、`rollback_latest` 等任务。
+- 观察模式：传 `--disable-worker`，只提供状态、事件、报告、历史和已有 job 查看能力；新入队任务不会由该进程消费。
+- 轮询间隔：可用 `--worker-poll-interval-seconds 1.5` 调整 worker 拉取 job 的频率。
+
+端口与部署建议：
+
+- 单机或 SSH 隧道优先绑定 `127.0.0.1`，通过 `ssh -L 8765:127.0.0.1:8765 <host>` 访问。
+- 需要团队访问时，建议放在 HTTPS 反向代理后面，并保留 `AGENTIC_TRACE_UI_TOKEN` 鉴权；不要把 `--disable-auth` 暴露到共享网络。
+- 生产观察期建议继续保持项目配置里的 `auto_recovery_dry_run: true`，先验证事件、报告、审批、恢复历史和 rollback 元数据。
+- `state/` 和 `outputs/monitors/` 是运行数据目录，应挂载到持久化磁盘并纳入日志/备份策略，但不要提交到 Git。
+
+只读与高风险边界：
+
+- 状态、事件、报告、恢复历史和 job 日志读取走 GET 接口，适合日常观察。
+- 连接项目、启动/停止监控、刷新日志、生成报告和 dry-run 恢复会写入 job、trace 或状态文件，但不应绕过 policy / runtime gate。
+- live apply、审批通过、重试高风险 job 和 rollback 会触发明确确认弹窗，并要求输入确认词；后端仍会校验 confirmation、operator、request_id、fix_id、fingerprint、rollback 可用性和 runtime gate。
+- 高风险故障域仍默认进入 `manual_escalation`；UI 只是受控操作面，不扩大自动恢复允许范围。
+
 ## 7. 测试
 
 核心测试基线：

@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from monitors.jsonl_store import append_jsonl, read_jsonl, rewrite_jsonl
+
 
 RECOVERY_HISTORY_SCHEMA_VERSION = "recovery_history.v1"
 
@@ -35,18 +37,6 @@ def _jsonable(data: Any) -> Any:
         return data
     except TypeError:
         return json.loads(json.dumps(data, ensure_ascii=False, default=str))
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-
-    records: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        records.append(json.loads(line))
-    return records
 
 
 def _identity(
@@ -236,8 +226,19 @@ class RecoveryHistoryStore:
         self._append(record)
         return record
 
-    def read_all(self) -> list[dict[str, Any]]:
-        return _read_jsonl(self.history_path)
+    def read_all(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        reverse: bool = False,
+    ) -> list[dict[str, Any]]:
+        return read_jsonl(
+            self.history_path,
+            limit=limit,
+            offset=offset,
+            reverse=reverse,
+        )
 
     def get_applied_by_identity(self, identity: str) -> dict[str, Any]:
         applied = [
@@ -264,7 +265,13 @@ class RecoveryHistoryStore:
                 latest[identity] = record
         return latest
 
-    def merged_records(self, scanned_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def merged_records(
+        self,
+        scanned_records: list[dict[str, Any]],
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         scanned_by_identity = {
             str(item.get("identity", "")): dict(item)
             for item in scanned_records
@@ -308,7 +315,7 @@ class RecoveryHistoryStore:
                 )
 
         rows = list(merged.values())
-        return sorted(
+        rows = sorted(
             rows,
             key=lambda item: (
                 str(item.get("updated_at") or item.get("created_at") or ""),
@@ -316,6 +323,11 @@ class RecoveryHistoryStore:
             ),
             reverse=True,
         )
+        if offset:
+            rows = rows[max(0, int(offset)) :]
+        if limit is not None:
+            rows = rows[: max(0, int(limit))]
+        return rows
 
     def _rollback_record(
         self,
@@ -393,5 +405,9 @@ class RecoveryHistoryStore:
         }
 
     def _append(self, record: dict[str, Any]) -> None:
-        with self.history_path.open("a", encoding="utf-8") as f:
-            f.write(_json_dumps(record) + "\n")
+        append_jsonl(self.history_path, record)
+
+    def compact(self) -> list[dict[str, Any]]:
+        records = self.read_all()
+        rewrite_jsonl(self.history_path, records)
+        return records

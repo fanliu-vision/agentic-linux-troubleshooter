@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from monitors.jsonl_store import append_jsonl, read_jsonl, rewrite_jsonl
 from monitors.project_registry import ProjectConfig, ProjectRegistry
 
 
@@ -116,15 +117,7 @@ def _jsonable(data: Any) -> Any:
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-
-    records: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        records.append(json.loads(line))
-    return records
+    return read_jsonl(path)
 
 
 def _latest_by_updated_at(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -283,8 +276,19 @@ class JobStore:
         )
         return record
 
-    def read_all(self) -> list[dict[str, Any]]:
-        return _read_jsonl(self.jobs_path)
+    def read_all(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        reverse: bool = False,
+    ) -> list[dict[str, Any]]:
+        return read_jsonl(
+            self.jobs_path,
+            limit=limit,
+            offset=offset,
+            reverse=reverse,
+        )
 
     def get(self, job_id: str) -> dict[str, Any]:
         latest = _latest_by_updated_at(
@@ -294,7 +298,12 @@ class JobStore:
             raise KeyError(f"job_not_found:{job_id}")
         return latest
 
-    def jobs(self, *, limit: int | None = None) -> list[dict[str, Any]]:
+    def jobs(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         latest: dict[str, dict[str, Any]] = {}
         for record in self.read_all():
             job_id = str(record.get("job_id", ""))
@@ -303,6 +312,8 @@ class JobStore:
             latest[job_id] = record
 
         rows = sorted(latest.values(), key=_job_sort_key, reverse=True)
+        if offset:
+            rows = rows[max(0, int(offset)) :]
         if limit is not None:
             return rows[: max(0, int(limit))]
         return rows
@@ -523,18 +534,14 @@ class JobStore:
             "message": message,
             "metadata": _jsonable(dict(metadata or {})),
         }
-        path = self.job_log_path(job_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            f.write(_json_dumps(entry) + "\n")
+        append_jsonl(self.job_log_path(job_id), entry)
         return entry
 
     def job_log(self, job_id: str, *, limit: int = 200) -> dict[str, Any]:
         self.get(job_id)
         path = self.job_log_path(job_id)
-        entries = _read_jsonl(path)
-        if limit > 0:
-            entries = entries[-limit:]
+        entries = read_jsonl(path, limit=limit, reverse=True)
+        entries = list(reversed(entries))
         lines = [
             f"{entry.get('created_at', '')} [{entry.get('event', '')}] {entry.get('message', '')}"
             for entry in entries
@@ -548,8 +555,12 @@ class JobStore:
         }
 
     def _append(self, record: dict[str, Any]) -> None:
-        with self.jobs_path.open("a", encoding="utf-8") as f:
-            f.write(_json_dumps(record) + "\n")
+        append_jsonl(self.jobs_path, record)
+
+    def compact(self) -> list[dict[str, Any]]:
+        records = self.jobs()
+        rewrite_jsonl(self.jobs_path, list(reversed(records)))
+        return records
 
     def _update(
         self,
@@ -641,11 +652,11 @@ class RuntimeControlService:
             "jobs_path": str(self.job_store.jobs_path),
         }
 
-    def jobs(self, *, limit: int = 20) -> dict[str, Any]:
+    def jobs(self, *, limit: int = 20, offset: int = 0) -> dict[str, Any]:
         return {
             "project_id": self.project_id,
             "jobs_path": str(self.job_store.jobs_path),
-            "jobs": self.job_store.jobs(limit=limit),
+            "jobs": self.job_store.jobs(limit=limit, offset=offset),
         }
 
     def connect(

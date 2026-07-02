@@ -27,6 +27,7 @@ const state = {
   selectedJobLog: null,
   loadingJobAction: "",
   pollTimer: null,
+  pendingConfirmation: null,
 };
 
 const els = {
@@ -121,6 +122,20 @@ const els = {
   reportMeta: document.getElementById("reportMeta"),
   reportType: document.getElementById("reportType"),
   reportContent: document.getElementById("reportContent"),
+  confirmOverlay: document.getElementById("confirmOverlay"),
+  confirmTitle: document.getElementById("confirmTitle"),
+  confirmSubtitle: document.getElementById("confirmSubtitle"),
+  confirmRiskBadge: document.getElementById("confirmRiskBadge"),
+  confirmActionLabel: document.getElementById("confirmActionLabel"),
+  confirmProject: document.getElementById("confirmProject"),
+  confirmOperator: document.getElementById("confirmOperator"),
+  confirmRequestId: document.getElementById("confirmRequestId"),
+  confirmImpact: document.getElementById("confirmImpact"),
+  confirmWordLabel: document.getElementById("confirmWordLabel"),
+  confirmWordInput: document.getElementById("confirmWordInput"),
+  confirmWarning: document.getElementById("confirmWarning"),
+  confirmCancelButton: document.getElementById("confirmCancelButton"),
+  confirmSubmitButton: document.getElementById("confirmSubmitButton"),
 };
 
 const UI_LABELS = {
@@ -192,11 +207,31 @@ const UI_LABELS = {
 };
 
 const HIGH_RISK_ACTIONS = {
-  live_apply: "执行 live apply",
-  rollback_latest: "回滚最近一次修复",
-  recovery_history_rollback: "回滚这条修复历史",
-  approval_approve: "批准并进入审批后执行流程",
-  job_retry: "重试高风险任务",
+  live_apply: {
+    label: "执行 live apply",
+    confirmWord: "LIVE APPLY",
+    impact: "会消费已批准的恢复请求，并在后台重新经过安全 gate 后执行真实 apply。",
+  },
+  rollback_latest: {
+    label: "回滚最近一次修复",
+    confirmWord: "ROLLBACK",
+    impact: "会回滚当前项目最近一次可回滚修复，并写入 rollback trace、job 和审计报告。",
+  },
+  recovery_history_rollback: {
+    label: "回滚这条修复历史",
+    confirmWord: "ROLLBACK",
+    impact: "会针对所选恢复历史创建回滚任务；只有当前最新可回滚记录会被执行。",
+  },
+  approval_approve: {
+    label: "批准并进入审批后执行流程",
+    confirmWord: "APPROVE",
+    impact: "会把审批请求标记为 approved，并自动排队 approved_recovery_job。",
+  },
+  job_retry: {
+    label: "重试高风险任务",
+    confirmWord: "RETRY",
+    impact: "会复制原高风险任务参数重新排队；worker 仍会执行安全检查。",
+  },
 };
 
 const ERROR_EXPLANATIONS = {
@@ -211,6 +246,10 @@ const ERROR_EXPLANATIONS = {
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running", "cancel_requested"]);
 const RETRYABLE_JOB_STATUSES = new Set(["failed", "blocked", "canceled", "timed_out"]);
 const HIGH_RISK_JOB_ACTIONS = new Set(["live_apply", "rollback_latest", "approved_recovery_job"]);
+const ATTENTION_EVENT_STATUSES = new Set(["blocked", "failed", "execution_blocked", "execution_failed"]);
+const COMPLETE_EVENT_STATUSES = new Set(["recovered", "fix_applied", "execution_succeeded", "rollback_done"]);
+const HIGH_ATTENTION_SEVERITIES = new Set(["critical", "high"]);
+const REPORT_PREVIEW_LIMIT = 12000;
 const DETAIL_TABS = [
   ["evidence", "detailTabEvidence", "detailPaneEvidence"],
   ["policy", "detailTabPolicy", "detailPanePolicy"],
@@ -324,21 +363,96 @@ function showLoginError(message) {
   els.loginError.classList.toggle("hidden", !message);
 }
 
-function highRiskConfirmation(action) {
-  const label = HIGH_RISK_ACTIONS[action];
-  if (!label) {
-    return {};
+function confirmationProjectLabel() {
+  const project = selectedProject();
+  if (!project.project_id) {
+    return state.projectId || "-";
   }
-  const ok = window.confirm(
-    `${label}\n\n该操作会记录操作员、job、trace 和审计信息；后台 worker 会继续执行安全检查。确认继续？`,
-  );
-  if (!ok) {
-    return null;
+  return project.name
+    ? `${project.name} (${project.project_id})`
+    : project.project_id;
+}
+
+function confirmationTarget(context = {}) {
+  return [
+    context.requestId ? `request=${context.requestId}` : "",
+    context.jobId ? `job=${context.jobId}` : "",
+    context.rollbackIdentity ? `rollback=${context.rollbackIdentity}` : "",
+    context.fingerprint ? `event=${context.fingerprint}` : "",
+  ].filter(Boolean).join(" | ") || "-";
+}
+
+function closeHighRiskDialog(result) {
+  if (!state.pendingConfirmation) {
+    return;
   }
-  return {
+  const pending = state.pendingConfirmation;
+  state.pendingConfirmation = null;
+  els.confirmOverlay.classList.add("hidden");
+  els.confirmWarning.textContent = "";
+  els.confirmWordInput.value = "";
+  pending.resolve(result);
+}
+
+function highRiskConfirmation(action, context = {}) {
+  const config = HIGH_RISK_ACTIONS[action];
+  if (!config) {
+    return Promise.resolve({});
+  }
+
+  if (state.pendingConfirmation) {
+    closeHighRiskDialog(null);
+  }
+
+  const expected = config.confirmWord;
+  els.confirmTitle.textContent = "确认高风险操作";
+  els.confirmSubtitle.textContent = "该操作会记录操作员、job、trace 和审计信息；后台 worker 会继续执行安全检查。";
+  els.confirmRiskBadge.textContent = context.risk || "高风险";
+  els.confirmActionLabel.textContent = config.label;
+  els.confirmProject.textContent = confirmationProjectLabel();
+  els.confirmOperator.textContent = text(state.auth?.operator, "operator");
+  els.confirmRequestId.textContent = confirmationTarget(context);
+  els.confirmImpact.textContent = context.impact || config.impact;
+  els.confirmWordLabel.textContent = `输入确认词：${expected}`;
+  els.confirmWarning.textContent = "";
+  els.confirmSubmitButton.disabled = true;
+  els.confirmSubmitButton.classList.add("primary-danger");
+  els.confirmOverlay.classList.remove("hidden");
+  els.confirmWordInput.value = "";
+  els.confirmWordInput.focus();
+
+  return new Promise((resolve) => {
+    state.pendingConfirmation = {
+      action,
+      expected,
+      resolve,
+    };
+  });
+}
+
+function updateConfirmationSubmitState() {
+  const pending = state.pendingConfirmation;
+  if (!pending) {
+    return;
+  }
+  const matches = els.confirmWordInput.value.trim() === pending.expected;
+  els.confirmSubmitButton.disabled = !matches;
+  els.confirmWarning.textContent = matches ? "" : `请输入 ${pending.expected} 后继续`;
+}
+
+function submitHighRiskDialog() {
+  const pending = state.pendingConfirmation;
+  if (!pending) {
+    return;
+  }
+  if (els.confirmWordInput.value.trim() !== pending.expected) {
+    updateConfirmationSubmitState();
+    return;
+  }
+  closeHighRiskDialog({
     confirm: true,
-    confirmation_action: action,
-  };
+    confirmation_action: pending.action,
+  });
 }
 
 function selectedProject() {
@@ -384,7 +498,7 @@ function renderConsole() {
   const runtime = state.runtime || {};
   const worker = state.worker || {};
   const workerRunning = Boolean(worker.running);
-  const latestEvents = (state.events || []).slice(0, 4);
+  const latestEvents = workflowEvents(state.events || []).slice(0, 4);
   const pending = (state.events || []).filter((event) => event.pending_approval).slice(0, 4);
   const recentJobs = (state.jobs || []).slice(0, 4);
   const recentReports = (state.reports || []).slice(0, 4);
@@ -405,10 +519,10 @@ function renderConsole() {
   els.workerBadge.className = `worker-badge ${workerRunning ? "worker-ok" : "worker-error"}`;
   els.workerBadge.textContent = workerRunning ? "worker 运行中" : "worker 未运行";
 
-  renderConsoleItems(els.consoleLatestEvents, latestEvents, consoleEventItem, "暂无事件");
+  renderConsoleItems(els.consoleLatestEvents, latestEvents, consoleEventItem, "暂无待处理事件，可先启动监控");
   renderConsoleItems(els.consolePendingApprovals, pending, consoleEventItem, "暂无待审批");
-  renderConsoleItems(els.consoleRecentJobs, recentJobs, consoleJobItem, "暂无任务");
-  renderConsoleItems(els.consoleRecentReports, recentReports, consoleReportItem, "暂无报告");
+  renderConsoleItems(els.consoleRecentJobs, recentJobs, consoleJobItem, "暂无任务，可先生成报告");
+  renderConsoleItems(els.consoleRecentReports, recentReports, consoleReportItem, "暂无报告，可先生成首次报告");
 }
 
 function renderConsoleItems(target, items, itemRenderer, emptyText) {
@@ -572,38 +686,54 @@ function recoveryHistoryItem(record) {
         button,
       ]),
     ]),
-    historyEditsTable(edits),
+    historyEditsTable(edits, backup),
     el("div", { class: "history-backup" }, [
+      summaryItem("rollback", `${display(status, "未知")}${record.rollback_job_id ? ` | job=${record.rollback_job_id}` : ""}`),
       summaryItem("apply record", backup.record_path || record.record_path || "-"),
       summaryItem("backup", text(backup.backup_paths || [], "-")),
       summaryItem("diff", text(backup.diff_paths || [], "-")),
-      summaryItem("回滚 job", record.rollback_job_id || "-"),
     ]),
   ]);
 }
 
-function historyEditsTable(edits) {
+function editArtifact(edit, backup) {
+  const values = [
+    edit.diff_path ? `diff: ${edit.diff_path}` : "",
+    edit.backup_path ? `backup: ${edit.backup_path}` : "",
+    edit.record_path ? `record: ${edit.record_path}` : "",
+  ].filter(Boolean);
+  if (values.length) {
+    return values.join(" | ");
+  }
+  const backupDiffs = text(backup?.diff_paths || [], "");
+  const backupPaths = text(backup?.backup_paths || [], "");
+  return [backupDiffs ? `diff: ${backupDiffs}` : "", backupPaths ? `backup: ${backupPaths}` : ""]
+    .filter(Boolean)
+    .join(" | ") || "-";
+}
+
+function historyEditsTable(edits, backup = {}) {
   const table = el("table", { class: "history-edits-table" });
   const thead = el("thead", {}, [
     el("tr", {}, [
       el("th", { text: "字段" }),
-      el("th", { text: "旧值" }),
-      el("th", { text: "新值" }),
+      el("th", { text: "变更" }),
       el("th", { text: "配置" }),
+      el("th", { text: "diff / backup" }),
     ]),
   ]);
   const tbody = el("tbody");
   if (!edits.length) {
-    const td = el("td", { class: "muted", text: "暂无字段变更" });
+    const td = el("td", { class: "muted", text: "暂无字段变更，可查看下方 rollback / diff 状态" });
     td.colSpan = 4;
     tbody.appendChild(el("tr", {}, [td]));
   } else {
     edits.forEach((edit) => {
       tbody.appendChild(el("tr", {}, [
         el("td", { text: editField(edit) }),
-        el("td", { text: editOldValue(edit) }),
-        el("td", { text: editNewValue(edit) }),
+        el("td", { class: "history-change", text: `${editOldValue(edit)} -> ${editNewValue(edit)}` }),
         el("td", { text: text(edit.config_path, "-") }),
+        el("td", { class: "history-artifact", text: editArtifact(edit, backup) }),
       ]));
     });
   }
@@ -705,15 +835,24 @@ function renderJobLog() {
     els.jobLogPanel.classList.add("hidden");
     return;
   }
-  const job = state.jobs.find((item) => item.job_id === state.selectedJobId) || {};
+  const job = selectedJob();
+  const autoRefresh = ACTIVE_JOB_STATUSES.has(job.status)
+    ? "自动刷新中"
+    : "自动刷新已停止";
   els.jobLogPanel.classList.remove("hidden");
   els.jobLogTitle.textContent = `${display(job.action, "任务")}日志`;
   els.jobLogMeta.textContent = [
     state.selectedJobId,
     display(job.status, job.status),
+    autoRefresh,
     job.log_path || log.log_path,
+    log.updated_at ? `log=${log.updated_at}` : "",
   ].filter(Boolean).join(" | ");
   els.jobLogContent.textContent = log.text || "暂无日志";
+}
+
+function selectedJob() {
+  return state.jobs.find((item) => item.job_id === state.selectedJobId) || {};
 }
 
 async function openJobLog(jobId) {
@@ -769,7 +908,11 @@ async function retryJob(job) {
   }
   const body = {};
   if (HIGH_RISK_JOB_ACTIONS.has(job.action)) {
-    const confirmation = highRiskConfirmation("job_retry");
+    const confirmation = await highRiskConfirmation("job_retry", {
+      jobId: job.job_id,
+      requestId: job.payload?.request_id || job.result?.request_id || "",
+      impact: `重试 ${display(job.action, "高风险任务")}，原任务状态为 ${display(job.status, "未知")}。`,
+    });
     if (confirmation === null) {
       return;
     }
@@ -799,12 +942,59 @@ async function retryJob(job) {
   }
 }
 
+function eventTimestamp(event) {
+  const value = Date.parse(
+    event.updated_at || event.detected_at || event.created_at || event.timestamp || "",
+  );
+  return Number.isNaN(value) ? 0 : value;
+}
+
+function eventWorkflowRank(event) {
+  const approval = text(event.approval_status, "");
+  const status = text(event.status, "");
+  const severity = text(event.severity, "");
+  if (event.pending_approval || approval === "pending" || approval === "pending_approval") {
+    return 0;
+  }
+  if (approval === "approved") {
+    return 1;
+  }
+  if (ATTENTION_EVENT_STATUSES.has(status)) {
+    return 2;
+  }
+  if (HIGH_ATTENTION_SEVERITIES.has(severity)) {
+    return 3;
+  }
+  if (status === "manual_escalation") {
+    return 4;
+  }
+  if (COMPLETE_EVENT_STATUSES.has(status)) {
+    return 7;
+  }
+  return 5;
+}
+
+function workflowEvents(events) {
+  return [...(events || [])].sort((left, right) => {
+    const rank = eventWorkflowRank(left) - eventWorkflowRank(right);
+    if (rank !== 0) {
+      return rank;
+    }
+    return eventTimestamp(right) - eventTimestamp(left);
+  });
+}
+
+function defaultEventFingerprint() {
+  return workflowEvents(state.events)[0]?.fingerprint || "";
+}
+
 function filteredEvents() {
   const query = state.filter.trim().toLowerCase();
+  const rows = workflowEvents(state.events);
   if (!query) {
-    return state.events;
+    return rows;
   }
-  return state.events.filter((event) => {
+  return rows.filter((event) => {
     const haystack = [
       event.status,
       event.severity,
@@ -839,7 +1029,10 @@ function renderEvents() {
 
   if (rows.length === 0) {
     const tr = document.createElement("tr");
-    const td = el("td", { text: "暂无事件", class: "muted" });
+    const emptyText = state.filter.trim()
+      ? "没有匹配事件，清空筛选或刷新项目"
+      : "暂无事件，可先启动监控或生成首次报告";
+    const td = el("td", { text: emptyText, class: "muted" });
     td.colSpan = 6;
     tr.appendChild(td);
     els.eventRows.appendChild(tr);
@@ -1095,10 +1288,41 @@ function reportListItem(report) {
   ]);
 }
 
+function reportLineCount(content) {
+  if (!content) {
+    return 0;
+  }
+  return content.split(/\r?\n/).length;
+}
+
+function reportPreviewHeading(content) {
+  const lines = text(content, "").split(/\r?\n/);
+  const heading = lines.find((line) => /^#{1,3}\s+\S/.test(line.trim()));
+  if (heading) {
+    return heading.trim().replace(/^#{1,3}\s+/, "").trim();
+  }
+  return lines.find((line) => line.trim() && !/^-{3,}$/.test(line.trim()))?.trim() || "";
+}
+
+function reportPreviewText(content, status) {
+  if (!content) {
+    return `无法读取报告内容：${display(status, "未知状态")}`;
+  }
+  const preview = content.length > REPORT_PREVIEW_LIMIT
+    ? `${content.slice(0, REPORT_PREVIEW_LIMIT)}\n\n[内容已截断，打开报告文件查看完整内容]`
+    : content;
+  const heading = reportPreviewHeading(content);
+  return heading && !/^#{1,3}\s+\S/.test(preview.trimStart())
+    ? `# ${heading}\n\n${preview}`
+    : preview;
+}
+
 function renderReportDetail(detail) {
   const report = detail.report || {};
   const status = detail.content_status || "";
   const content = detail.content || "";
+  const lineCount = reportLineCount(content);
+  const charCount = content.length;
   els.reportDetailBox.classList.remove("hidden");
   els.reportTitle.textContent = text(report.title, "报告详情");
   els.reportType.className = `tag report-${cssToken(report.report_type)}`;
@@ -1109,8 +1333,11 @@ function renderReportDetail(detail) {
     report.fingerprint,
     report.job_id ? `job=${report.job_id}` : "",
     display(status, status),
+    lineCount ? `${lineCount} 行` : "",
+    charCount ? `${charCount} 字符` : "",
+    charCount > REPORT_PREVIEW_LIMIT ? "预览已截断" : "",
   ].filter(Boolean).join(" | ");
-  els.reportContent.textContent = content || `无法读取报告内容：${display(status, "未知状态")}`;
+  els.reportContent.textContent = reportPreviewText(content, status);
 }
 
 async function openReport(reportId) {
@@ -1196,7 +1423,7 @@ function clearDetail(message, options = {}) {
   if (options.guide) {
     els.emptyState.appendChild(el("div", { class: "empty-guide" }, [
       el("h3", { text: message }),
-      el("p", { text: "连接项目、启动监控，或先生成一份报告来建立初始运行基线。" }),
+      el("p", { text: "从连接项目开始；如果已有日志，可启动监控或生成首次报告建立运行基线。" }),
       el("div", { class: "empty-guide-actions" }, [
         guidedActionButton("连接项目", () => runRuntimeAction(selectedProject().mode === "local" ? "local" : "remote")),
         guidedActionButton("启动监控", () => runOperation("start_monitor")),
@@ -1244,7 +1471,13 @@ async function submitApproval(requestId, action, comment) {
   if (!requestId || state.loadingApproval) {
     return;
   }
-  const confirmation = highRiskConfirmation(`approval_${action}`);
+  const confirmation = await highRiskConfirmation(`approval_${action}`, {
+    requestId,
+    fingerprint: state.selectedFingerprint,
+    impact: action === "approve"
+      ? "批准后会立即排队 approved_recovery_job；恢复 worker 会重新校验 fix_id、fingerprint、rollback 和 runtime gate。"
+      : "该审批决策会写入 trace 和 approval log。",
+  });
   if (confirmation === null) {
     return;
   }
@@ -1300,7 +1533,14 @@ async function runOperation(action) {
   }
 
   const projectPart = encodeURIComponent(state.projectId);
-  const confirmation = highRiskConfirmation(action);
+  const confirmation = await highRiskConfirmation(action, {
+    requestId: action === "live_apply"
+      ? text((state.events || []).find((event) => event.approval_status === "approved")?.request_id, "")
+      : "",
+    impact: action === "rollback_latest"
+      ? "会尝试回滚当前项目最近一次可回滚修复；执行前后都会写入 job、trace、报告和恢复历史。"
+      : undefined,
+  });
   if (confirmation === null) {
     return;
   }
@@ -1329,7 +1569,14 @@ async function rollbackHistory(identity) {
     return;
   }
   const projectPart = encodeURIComponent(state.projectId);
-  const confirmation = highRiskConfirmation("recovery_history_rollback");
+  const target = (state.recoveryHistory || []).find((item) => item.identity === identity) || {};
+  const confirmation = await highRiskConfirmation("recovery_history_rollback", {
+    requestId: target.request_id || "",
+    jobId: target.job_id || "",
+    rollbackIdentity: identity,
+    fingerprint: target.fingerprint || "",
+    impact: `将回滚 fix=${text(target.fix_id, "unknown")} 的字段变更；只有最新可回滚记录会被后端接受。`,
+  });
   if (confirmation === null) {
     return;
   }
@@ -1466,7 +1713,7 @@ async function loadProject({ keepSelection = false } = {}) {
   state.rollbackTarget = recoveryHistory.rollback_target || null;
 
   if (!keepSelection || !state.events.some((event) => event.fingerprint === state.selectedFingerprint)) {
-    state.selectedFingerprint = state.events[0]?.fingerprint || "";
+    state.selectedFingerprint = defaultEventFingerprint();
   }
 
   renderOverview();
@@ -1660,6 +1907,32 @@ els.opRollbackLatest.addEventListener("click", async () => {
 els.eventFilter.addEventListener("input", (event) => {
   state.filter = event.target.value;
   renderEvents();
+});
+
+els.confirmWordInput.addEventListener("input", updateConfirmationSubmitState);
+
+els.confirmWordInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    submitHighRiskDialog();
+  }
+});
+
+els.confirmSubmitButton.addEventListener("click", submitHighRiskDialog);
+
+els.confirmCancelButton.addEventListener("click", () => {
+  closeHighRiskDialog(null);
+});
+
+els.confirmOverlay.addEventListener("click", (event) => {
+  if (event.target === els.confirmOverlay) {
+    closeHighRiskDialog(null);
+  }
+});
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.pendingConfirmation) {
+    closeHighRiskDialog(null);
+  }
 });
 
 init().catch((error) => {

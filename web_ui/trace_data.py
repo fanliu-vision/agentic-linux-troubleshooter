@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from monitors.jsonl_store import read_jsonl
 from monitors.project_registry import ProjectRegistry
 from monitors.report_index_store import ReportIndexStore
 from monitors.trace_store import (
@@ -19,18 +19,6 @@ from monitors.trace_store import (
     ApprovalStore,
     TraceStore,
 )
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        rows.append(json.loads(line))
-    return rows
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -241,10 +229,10 @@ class TraceUiDataService:
         ).expire(request_id, operator=operator, comment=comment)
 
     def _trace_records(self) -> list[dict[str, Any]]:
-        return _read_jsonl(self.trace_path)
+        return read_jsonl(self.trace_path)
 
     def _approval_records(self) -> list[dict[str, Any]]:
-        return _read_jsonl(self.approval_path)
+        return read_jsonl(self.approval_path)
 
     def _report_store(self) -> ReportIndexStore:
         return ReportIndexStore(project_id=self.project_id, state_dir=self.state_dir)

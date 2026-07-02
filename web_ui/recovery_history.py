@@ -38,10 +38,17 @@ class RecoveryHistoryService:
     def project(self) -> ProjectConfig:
         return ProjectRegistry(self.config_path).get(self.project_id)
 
-    def history(self, *, limit: int | None = None) -> dict[str, Any]:
-        rows = self.store.merged_records(self.scanned_apply_records())
-        if limit is not None:
-            rows = rows[: max(0, int(limit))]
+    def history(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        rows = self.store.merged_records(
+            self.scanned_apply_records(),
+            limit=limit,
+            offset=offset,
+        )
         return {
             "project_id": self.project_id,
             "history_path": str(self.store.history_path),

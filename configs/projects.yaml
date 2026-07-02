@@ -29,6 +29,7 @@ projects:
       auto_recover: true
       auto_recovery_policy_enabled: true
       auto_recovery_dry_run: true
+      require_human_approval_for_live_apply: false
       rollback_on_failure: true
       auto_rerun_after_apply: true
       allow_auto_apply:

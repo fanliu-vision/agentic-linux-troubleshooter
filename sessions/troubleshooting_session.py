@@ -183,12 +183,20 @@ class TroubleshootingSession:
         self.run_command = run_command
         return f"项目运行命令已设置为：{self.run_command}"
 
-    def set_remote_profile(self, user: str, host: str, port: int = 22, name: str = "default") -> str:
+    def set_remote_profile(
+        self,
+        user: str,
+        host: str,
+        port: int = 22,
+        name: str = "default",
+        key_path: str = "",
+    ) -> str:
         self.remote_profile = RemoteSSHProfile(
             user=user,
             host=host,
             port=port,
             name=name,
+            key_path=key_path,
         )
 
         return (
@@ -197,6 +205,7 @@ class TroubleshootingSession:
             f"- user: `{user}`\n"
             f"- host: `{host}`\n"
             f"- port: `{port}`\n\n"
+            f"- key_path_configured: `{bool(key_path)}`\n\n"
             "说明：当前版本只支持远程只读命令，不支持远程 apply / rm / kill / scancel / sudo。"
         )
 

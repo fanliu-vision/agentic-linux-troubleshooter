@@ -267,6 +267,8 @@ projects:
       remote_log_max_bytes_per_poll: 4096
       auto_report: false
       max_events_per_run: 3
+    policy:
+      require_human_approval_for_live_apply: true
 """,
             encoding="utf-8",
         )
@@ -277,3 +279,4 @@ projects:
         assert project.monitor.remote_watermark_enabled is False
         assert project.monitor.remote_watermark_shadow is True
         assert project.monitor.remote_log_max_bytes_per_poll == 4096
+        assert project.policy.require_human_approval_for_live_apply is True

@@ -13,6 +13,7 @@ class RemoteSSHProfile:
     user: str
     port: int = 22
     name: str = "default"
+    key_path: str = ""
 
     @property
     def target(self) -> str:
@@ -23,8 +24,25 @@ class RemoteSSHProfile:
             f"name={self.name}, "
             f"user={self.user}, "
             f"host={self.host}, "
-            f"port={self.port}"
+            f"port={self.port}, "
+            f"key_path_configured={bool(self.key_path)}"
         )
+
+
+def ssh_base_args(profile: RemoteSSHProfile, *, connect_timeout: int = 8) -> list[str]:
+    args = [
+        "ssh",
+        "-p",
+        str(profile.port),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"ConnectTimeout={connect_timeout}",
+    ]
+    if profile.key_path:
+        args.extend(["-i", profile.key_path])
+    args.append(profile.target)
+    return args
 
 
 @dataclass
@@ -158,17 +176,7 @@ class RemoteReadonlySSHExecutor:
                 reason=reason,
             )
 
-        ssh_cmd = [
-            "ssh",
-            "-p",
-            str(profile.port),
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=8",
-            profile.target,
-            command,
-        ]
+        ssh_cmd = [*ssh_base_args(profile, connect_timeout=8), command]
 
         try:
             completed = subprocess.run(
@@ -420,8 +428,6 @@ class RemoteReadonlySSHExecutor:
         safe_patterns = [
             r"^python\s+[\w./-]+(\s+--[\w-]+\s+[\w./-]+)*$",
             r"^python3\s+[\w./-]+(\s+--[\w-]+\s+[\w./-]+)*$",
-            r"^bash\s+[\w./-]+$",
-            r"^sh\s+[\w./-]+$",
         ]
 
         for pattern in safe_patterns:
@@ -430,7 +436,7 @@ class RemoteReadonlySSHExecutor:
 
         return False, (
             "远程 rerun 命令不在允许模式中。"
-            "当前仅允许 python/python3/bash/sh 运行项目脚本，且不能包含管道、重定向、&&、sudo、rm 等危险操作。"
+            "当前仅允许 python/python3 运行项目脚本，且不能包含管道、重定向、&&、sudo、rm 等危险操作。"
         )
 
     def _run_fixed_readonly(
@@ -440,17 +446,7 @@ class RemoteReadonlySSHExecutor:
         display_command: str,
         reason: str = "固定远程项目上下文扫描命令，只读执行。",
     ) -> RemoteCommandResult:
-        ssh_cmd = [
-            "ssh",
-            "-p",
-            str(profile.port),
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=8",
-            profile.target,
-            command,
-        ]
+        ssh_cmd = [*ssh_base_args(profile, connect_timeout=8), command]
 
         try:
             completed = subprocess.run(
@@ -489,17 +485,7 @@ class RemoteReadonlySSHExecutor:
         display_command: str,
         reason: str,
     ) -> RemoteCommandResult:
-        ssh_cmd = [
-            "ssh",
-            "-p",
-            str(profile.port),
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=8",
-            profile.target,
-            command,
-        ]
+        ssh_cmd = [*ssh_base_args(profile, connect_timeout=8), command]
 
         try:
             completed = subprocess.run(

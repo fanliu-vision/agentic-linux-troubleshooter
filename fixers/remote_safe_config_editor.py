@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tools.remote_ssh_executor import RemoteSSHProfile
+from tools.remote_ssh_executor import RemoteSSHProfile, ssh_base_args
 
 
 @dataclass
@@ -130,17 +130,7 @@ class RemoteSafeConfigEditor:
         command = f"cat {shlex.quote(remote_path)}"
 
         result = subprocess.run(
-            [
-                "ssh",
-                "-p",
-                str(self.profile.port),
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=8",
-                self.profile.target,
-                command,
-            ],
+            [*ssh_base_args(self.profile, connect_timeout=8), command],
             capture_output=True,
             text=True,
             timeout=self.timeout,
@@ -162,17 +152,7 @@ class RemoteSafeConfigEditor:
         command = f"python3 -c {shlex.quote(script)} {shlex.quote(payload_b64)}"
 
         completed = subprocess.run(
-            [
-                "ssh",
-                "-p",
-                str(self.profile.port),
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=8",
-                self.profile.target,
-                command,
-            ],
+            [*ssh_base_args(self.profile, connect_timeout=8), command],
             capture_output=True,
             text=True,
             timeout=self.timeout,

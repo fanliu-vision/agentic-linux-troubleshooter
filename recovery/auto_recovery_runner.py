@@ -15,6 +15,7 @@ from recovery.auto_recovery_runtime_gate import (
 )
 from recovery.auto_recovery_runtime_controls import RuntimeAutoRecoveryCooldownTracker
 from sessions import EvidenceItem, TroubleshootingSession
+from monitors.trace_store import APPROVAL_STATUS_APPROVED
 
 
 @dataclass
@@ -33,6 +34,8 @@ class AutoRecoveryResult:
     decision_shadow: dict[str, Any] = field(default_factory=dict)
     apply_edit_summary: list[dict[str, Any]] = field(default_factory=list)
     rollback_edit_summary: list[dict[str, Any]] = field(default_factory=list)
+    approval_request_record: dict[str, Any] = field(default_factory=dict)
+    approval_decision_record: dict[str, Any] = field(default_factory=dict)
 
     @property
     def recovered(self) -> bool:
@@ -146,6 +149,18 @@ class AutoRecoveryResult:
                 "rollback_success": self.rollback_success,
                 "apply_edit_summary": list(self.apply_edit_summary),
                 "rollback_edit_summary": list(self.rollback_edit_summary),
+                "approval_required": bool(self.approval_request_record),
+                "approval_request": dict(self.approval_request_record),
+                "approval_decision": dict(self.approval_decision_record),
+                "approval_request_id": str(
+                    self.approval_request_record.get("request_id", "")
+                ),
+                "approval_status": str(
+                    (
+                        self.approval_decision_record
+                        or self.approval_request_record
+                    ).get("status", "")
+                ),
                 "recovered": self.recovered,
                 "event_recovery_status": self.event_recovery_status,
                 "residual_risk_status": self.residual_risk_status,
@@ -180,6 +195,10 @@ class AutoRecoveryResult:
 
     def _execution_result(self) -> str:
         if self.r15_gate is not None and not self.r15_gate.allowed_to_execute:
+            if self.r15_gate.downgrade_reason == "human_approval_required":
+                return "not_run_human_approval_required"
+            if self.r15_gate.downgrade_reason.startswith("approval_"):
+                return "not_run_approval_invalid"
             if (
                 self.r15_gate.dry_run
                 and self.r15_gate.auto_recover_allowed
@@ -357,11 +376,15 @@ class AutoRecoveryRunner:
         project: ProjectConfig,
         session: TroubleshootingSession,
         policy: CompatibilityRemediationPolicy | None = None,
+        trace_store: Any | None = None,
+        approval_store: Any | None = None,
     ) -> None:
         self.project = project
         self.session = session
         self.policy = policy or CompatibilityRemediationPolicy()
         self.cooldown_tracker = RuntimeAutoRecoveryCooldownTracker.from_project(project)
+        self.trace_store = trace_store
+        self.approval_store = approval_store
 
     def is_auto_recover_candidate(self, event: ErrorEvent) -> bool:
         decision = self.policy.decide(event=event, project=self.project)
@@ -381,6 +404,24 @@ class AutoRecoveryRunner:
         return gate.is_candidate and gate.precheck_result.get("passed") is True
 
     def recover(self, event: ErrorEvent) -> AutoRecoveryResult:
+        return self._recover(event=event, approval_request_id="")
+
+    def recover_after_approval(
+        self,
+        event: ErrorEvent,
+        approval_request_id: str,
+    ) -> AutoRecoveryResult:
+        return self._recover(
+            event=event,
+            approval_request_id=approval_request_id,
+        )
+
+    def _recover(
+        self,
+        *,
+        event: ErrorEvent,
+        approval_request_id: str = "",
+    ) -> AutoRecoveryResult:
         issue_type = getattr(event, "issue_type", getattr(event, "event_type", "unknown"))
         decision = self.policy.decide(event=event, project=self.project)
         report_scope_start = self._find_event_evidence_start(event)
@@ -416,19 +457,40 @@ class AutoRecoveryRunner:
         result.r15_gate = gate
 
         if gate.allowed_to_execute:
-            reservation = self.cooldown_tracker.reserve(
-                event_type=event.event_type,
-                fingerprint=event.fingerprint,
-                project_id=self.project.project_id,
-            )
-            gate.cooldown_result = reservation
-            if reservation.get("allowed") is not True:
-                gate.allowed_to_execute = False
-                gate.would_execute = False
-                gate.downgrade_reason = str(
-                    reservation.get("reason") or "cooldown_not_satisfied"
+            if approval_request_id:
+                approval_allowed, approval_reason = self._validate_approval_for_gate(
+                    event=event,
+                    gate=gate,
+                    approval_request_id=approval_request_id,
+                    result=result,
                 )
-            refresh_runtime_auto_recovery_audit(gate)
+                if not approval_allowed:
+                    self._block_gate(
+                        gate,
+                        reason=approval_reason,
+                        operator_required=True,
+                    )
+            elif self._requires_human_approval_for_live_apply():
+                self._block_gate(
+                    gate,
+                    reason="human_approval_required",
+                    operator_required=True,
+                )
+
+            if gate.allowed_to_execute:
+                reservation = self.cooldown_tracker.reserve(
+                    event_type=event.event_type,
+                    fingerprint=event.fingerprint,
+                    project_id=self.project.project_id,
+                )
+                gate.cooldown_result = reservation
+                if reservation.get("allowed") is not True:
+                    gate.allowed_to_execute = False
+                    gate.would_execute = False
+                    gate.downgrade_reason = str(
+                        reservation.get("reason") or "cooldown_not_satisfied"
+                    )
+                refresh_runtime_auto_recovery_audit(gate)
 
         result.decision = self._decision_from_r15_gate(
             legacy_decision=decision,
@@ -439,6 +501,29 @@ class AutoRecoveryRunner:
             final_decision=result.decision,
             gate=gate,
         )
+        self._trace(
+            "policy_decided",
+            event=event,
+            gate=gate,
+            payload={
+                "legacy_decision": self._decision_payload(decision),
+                "final_decision": self._decision_payload(result.decision),
+                "decision_shadow": dict(result.decision_shadow),
+                "runtime_policy_decision": dict(
+                    gate.audit_record.get("policy_decision") or {}
+                ),
+            },
+        )
+        self._trace(
+            "precheck_completed",
+            event=event,
+            gate=gate,
+            payload={
+                "precheck_result": gate.precheck_result,
+                "rollback_available": gate.rollback_available,
+                "cooldown_result": gate.cooldown_result,
+            },
+        )
 
         self.session.add_evidence(
             content=gate.to_markdown(),
@@ -446,6 +531,11 @@ class AutoRecoveryRunner:
             title=f"Runtime auto recovery gate: {event.event_type}",
             issue_type=issue_type,
         )
+        if not approval_request_id:
+            result.approval_request_record = self._create_approval_request_if_required(
+                event=event,
+                gate=gate,
+            )
 
         if not gate.allowed_to_execute:
             result.messages.append(
@@ -465,6 +555,16 @@ class AutoRecoveryRunner:
         result.messages.append(
             f"[Policy] 自动恢复已允许，准备执行 fix_id={result.decision.fix_id}。"
         )
+        self._trace(
+            "execution_started",
+            event=event,
+            result=result,
+            gate=gate,
+            payload={
+                "fix_id": result.decision.fix_id,
+                "mode": "remote" if self.project.is_remote else "local",
+            },
+        )
 
         try:
             self._generate_fix_plan_if_possible(result)
@@ -473,6 +573,19 @@ class AutoRecoveryRunner:
                 self._run_remote_recovery(result.decision, result)
             else:
                 self._run_local_recovery(result.decision, result)
+            self._trace(
+                "execution_finished",
+                event=event,
+                result=result,
+                gate=gate,
+                payload={
+                    "status": "completed",
+                    "apply_success": result.apply_success,
+                    "rerun_success": result.rerun_success,
+                    "recovered": result.recovered,
+                    "apply_edit_summary": list(result.apply_edit_summary),
+                },
+            )
 
             if (
                 result.apply_success
@@ -490,6 +603,19 @@ class AutoRecoveryRunner:
 
         except Exception as exc:
             result.messages.append(f"[RecoveryError] 自动恢复过程中出现异常：{type(exc).__name__}: {exc}")
+            self._trace(
+                "execution_finished",
+                event=event,
+                result=result,
+                gate=gate,
+                payload={
+                    "status": "exception",
+                    "exception_type": type(exc).__name__,
+                    "error": str(exc),
+                    "apply_success": result.apply_success,
+                    "rerun_success": result.rerun_success,
+                },
+            )
 
             if result.decision.rollback_on_failure:
                 self._rollback(result)
@@ -664,6 +790,17 @@ class AutoRecoveryRunner:
             result.messages.append("[Rollback] rerun 已成功，无需 rollback。")
             return
 
+        self._trace(
+            "rollback_started",
+            result=result,
+            payload={
+                "rollback_reason": "rerun_failed_after_apply",
+                "apply_success": result.apply_success,
+                "rerun_success": result.rerun_success,
+                "apply_edit_summary": list(result.apply_edit_summary),
+            },
+        )
+
         if self.project.is_remote:
             rollback_text = self.session.remote_rollback_latest_apply()
             result.messages.append("### Remote rollback result")
@@ -682,6 +819,15 @@ class AutoRecoveryRunner:
             )
 
         result.rollback_executed = True
+        self._trace(
+            "rollback_finished",
+            result=result,
+            payload={
+                "rollback_executed": result.rollback_executed,
+                "rollback_success": result.rollback_success,
+                "rollback_edit_summary": list(result.rollback_edit_summary),
+            },
+        )
 
     def _latest_session_apply_edits(self, *, remote: bool) -> list[dict[str, Any]]:
         attr = "latest_remote_apply_edit_records" if remote else "latest_apply_edit_records"
@@ -788,3 +934,149 @@ class AutoRecoveryRunner:
             title=f"Auto recovery result: {result.event_type}",
             issue_type="auto_recovery",
         )
+
+    def _create_approval_request_if_required(
+        self,
+        *,
+        event: ErrorEvent,
+        gate: RuntimeAutoRecoveryGateResult,
+    ) -> dict[str, Any]:
+        if self.approval_store is None:
+            return {}
+
+        if not gate.operator_required:
+            return {}
+
+        try:
+            return dict(self.approval_store.create_request_from_gate(
+                event=event,
+                gate=gate,
+                audit_record=gate.audit_record,
+                reason=gate.downgrade_reason,
+            ))
+        except Exception:
+            return {}
+
+    def _requires_human_approval_for_live_apply(self) -> bool:
+        return bool(
+            getattr(
+                self.project.policy,
+                "require_human_approval_for_live_apply",
+                False,
+            )
+        )
+
+    def _validate_approval_for_gate(
+        self,
+        *,
+        event: ErrorEvent,
+        gate: RuntimeAutoRecoveryGateResult,
+        approval_request_id: str,
+        result: AutoRecoveryResult,
+    ) -> tuple[bool, str]:
+        if self.approval_store is None:
+            return False, "approval_store_unavailable"
+
+        try:
+            request = dict(self.approval_store.get_request(approval_request_id))
+            latest = dict(self.approval_store.latest_record(approval_request_id))
+        except KeyError:
+            return False, "approval_request_not_found"
+
+        result.approval_request_record = request
+        result.approval_decision_record = latest
+
+        status = str(latest.get("status", ""))
+        if status != APPROVAL_STATUS_APPROVED:
+            return False, f"approval_status_not_approved:{status or '<missing>'}"
+
+        if str(request.get("fingerprint", "")) != event.fingerprint:
+            return False, "approval_fingerprint_mismatch"
+
+        if str(request.get("event_type", "")) != event.event_type:
+            return False, "approval_event_type_mismatch"
+
+        if str(request.get("selected_fix_id", "")) != gate.selected_fix_id:
+            return False, "approval_fix_id_mismatch"
+
+        if request.get("approvable") is not True:
+            return False, "approval_request_not_approvable"
+
+        return True, "approval_valid_after_fresh_gate"
+
+    @staticmethod
+    def _block_gate(
+        gate: RuntimeAutoRecoveryGateResult,
+        *,
+        reason: str,
+        operator_required: bool,
+    ) -> None:
+        gate.allowed_to_execute = False
+        gate.would_execute = False
+        gate.operator_required = operator_required
+        gate.downgrade_reason = reason
+        refresh_runtime_auto_recovery_audit(gate)
+
+    def _trace(
+        self,
+        stage: str,
+        *,
+        event: ErrorEvent | None = None,
+        result: AutoRecoveryResult | None = None,
+        gate: RuntimeAutoRecoveryGateResult | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        if self.trace_store is None:
+            return
+
+        record_payload = dict(payload or {})
+
+        if gate is not None:
+            record_payload["gate"] = self._gate_payload(gate)
+
+        event_type = getattr(event, "event_type", "")
+        fingerprint = getattr(event, "fingerprint", "")
+
+        if result is not None:
+            audit = result.recovery_audit_record()
+            event_type = event_type or result.event_type
+            fingerprint = fingerprint or str(audit.get("fingerprint", ""))
+            record_payload["recovery_audit_summary"] = result.recovery_audit_summary()
+
+        try:
+            self.trace_store.append(
+                stage,
+                event=event,
+                event_type=event_type,
+                fingerprint=fingerprint,
+                payload=record_payload,
+            )
+        except Exception:
+            return
+
+    @staticmethod
+    def _decision_payload(decision: RemediationDecision) -> dict[str, Any]:
+        return {
+            "action": decision.action,
+            "fix_id": decision.fix_id,
+            "severity": decision.severity,
+            "notify_owner": decision.notify_owner,
+            "should_rerun": decision.should_rerun,
+            "rollback_on_failure": decision.rollback_on_failure,
+            "reason": decision.reason,
+        }
+
+    @staticmethod
+    def _gate_payload(gate: RuntimeAutoRecoveryGateResult) -> dict[str, Any]:
+        return {
+            "strategy_layer": gate.strategy_layer,
+            "candidate_fix_id": gate.candidate_fix_id,
+            "selected_fix_id": gate.selected_fix_id,
+            "auto_recover_allowed": gate.auto_recover_allowed,
+            "dry_run": gate.dry_run,
+            "would_execute": gate.would_execute,
+            "allowed_to_execute": gate.allowed_to_execute,
+            "operator_required": gate.operator_required,
+            "rollback_available": gate.rollback_available,
+            "downgrade_reason": gate.downgrade_reason,
+        }

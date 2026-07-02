@@ -13,6 +13,18 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from detectors import ErrorEvent
 from monitors.project_registry import PolicyConfig, ProjectConfig
+from monitors.trace_store import (
+    APPROVAL_STATUS_APPROVED,
+    APPROVAL_STATUS_EXPIRED,
+    APPROVAL_STATUS_REJECTED,
+    TRACE_STAGE_APPROVAL_REQUIRED,
+    TRACE_STAGE_EXECUTION_FINISHED,
+    TRACE_STAGE_EXECUTION_STARTED,
+    TRACE_STAGE_POLICY_DECIDED,
+    TRACE_STAGE_PRECHECK_COMPLETED,
+    ApprovalStore,
+    TraceStore,
+)
 from policies import RemediationDecision
 import recovery.auto_recovery_runtime_controls as runtime_controls
 from recovery.auto_recovery_runner import AutoRecoveryResult, AutoRecoveryRunner
@@ -112,6 +124,7 @@ def make_project(
     dry_run: bool = True,
     allow_auto_apply: list[str] | None = None,
     policy_enabled: bool = True,
+    require_human_approval_for_live_apply: bool = False,
 ) -> ProjectConfig:
     project_dir = Path(tempfile.mkdtemp(prefix="r15-runner-gate-"))
     (project_dir / "config.json").write_text(
@@ -141,6 +154,9 @@ def make_project(
             rollback_on_failure=True,
             auto_recovery_policy_enabled=policy_enabled,
             auto_recovery_dry_run=dry_run,
+            require_human_approval_for_live_apply=(
+                require_human_approval_for_live_apply
+            ),
         ),
     )
 
@@ -175,6 +191,22 @@ def make_runner(project: ProjectConfig, session: FakeSession) -> AutoRecoveryRun
         lambda result, evidence_items=None: result.report_paths.append("fake-report.md")
     )
     return runner
+
+
+def attach_stores(
+    runner: AutoRecoveryRunner,
+    *,
+    state_dir: str,
+) -> tuple[TraceStore, ApprovalStore]:
+    trace_store = TraceStore(project_id=runner.project.project_id, state_dir=state_dir)
+    approval_store = ApprovalStore(
+        project_id=runner.project.project_id,
+        state_dir=state_dir,
+        trace_store=trace_store,
+    )
+    runner.trace_store = trace_store
+    runner.approval_store = approval_store
+    return trace_store, approval_store
 
 
 def test_r15_dry_run_gate_does_not_call_apply_or_rerun() -> None:
@@ -330,3 +362,276 @@ def test_runner_cooldown_blocks_repeated_live_execution() -> None:
     assert not second.r15_gate.allowed_to_execute
     assert second.decision.action == "report_only"
     assert session.apply_calls == ["fix-network-1"]
+
+
+def test_runner_writes_trace_for_live_execution() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = str(Path(tmp) / "state")
+        trace_store = TraceStore(project_id="runner_gate", state_dir=state_dir)
+        session = FakeSession()
+        runner = make_runner(make_project(dry_run=False), session)
+        runner.trace_store = trace_store
+
+        result = runner.recover(make_event("network_port", "network_port"))
+
+        assert result.recovered
+        stages = [record["stage"] for record in trace_store.read_all()]
+        assert stages == [
+            TRACE_STAGE_POLICY_DECIDED,
+            TRACE_STAGE_PRECHECK_COMPLETED,
+            TRACE_STAGE_EXECUTION_STARTED,
+            TRACE_STAGE_EXECUTION_FINISHED,
+        ]
+        execution_finished = trace_store.read_all()[-1]
+        assert execution_finished["payload"]["apply_success"] is True
+        assert execution_finished["payload"]["rerun_success"] is True
+
+
+def test_runner_creates_approval_request_for_operator_required_safe_fix() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        state_dir = str(Path(tmp) / "state")
+        trace_store = TraceStore(project_id="runner_gate", state_dir=state_dir)
+        approval_store = ApprovalStore(
+            project_id="runner_gate",
+            state_dir=state_dir,
+            trace_store=trace_store,
+        )
+        session = FakeSession()
+        runner = make_runner(
+            make_project(
+                dry_run=False,
+                allow_auto_apply=["fix-queue-backpressure-1"],
+            ),
+            session,
+        )
+        runner.trace_store = trace_store
+        runner.approval_store = approval_store
+        event = make_raw_event(
+            "queue_backpressure",
+            "queue_backpressure",
+            """
+[worker] worker overload caused by queue backpressure
+[worker] worker pool exhausted; concurrency too high
+""",
+        )
+
+        result = runner.recover(event)
+
+        assert result.decision.action == "manual_escalation"
+        assert session.apply_calls == []
+        approval_records = approval_store.read_all()
+        assert len(approval_records) == 1
+        assert approval_records[0]["record_type"] == "request"
+        assert approval_records[0]["approval_scope"] == "existing_safe_fix"
+        assert approval_records[0]["approvable"] is True
+
+        stages = [record["stage"] for record in trace_store.read_all()]
+        assert stages == [
+            TRACE_STAGE_POLICY_DECIDED,
+            TRACE_STAGE_PRECHECK_COMPLETED,
+            TRACE_STAGE_APPROVAL_REQUIRED,
+        ]
+
+
+def test_human_approval_config_blocks_live_apply_and_creates_pending_request() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        session = FakeSession()
+        runner = make_runner(
+            make_project(
+                dry_run=False,
+                require_human_approval_for_live_apply=True,
+            ),
+            session,
+        )
+        _, approval_store = attach_stores(runner, state_dir=str(Path(tmp) / "state"))
+
+        result = runner.recover(make_event("network_port", "network_port"))
+
+        assert result.r15_gate is not None
+        assert result.r15_gate.downgrade_reason == "human_approval_required"
+        assert not result.r15_gate.allowed_to_execute
+        assert result.decision.action == "manual_escalation"
+        assert result.recovery_audit_record()["execution_result"] == (
+            "not_run_human_approval_required"
+        )
+        assert session.apply_calls == []
+        assert session.rerun_calls == 0
+
+        approval_records = approval_store.read_all()
+        assert len(approval_records) == 1
+        assert approval_records[0]["record_type"] == "request"
+        assert approval_records[0]["status"] == "pending"
+        assert approval_records[0]["approval_scope"] == "existing_safe_fix"
+        assert approval_records[0]["selected_fix_id"] == "fix-network-1"
+
+
+def test_recover_after_approval_reruns_gate_and_executes_when_still_safe() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        session = FakeSession()
+        runner = make_runner(
+            make_project(
+                dry_run=False,
+                require_human_approval_for_live_apply=True,
+            ),
+            session,
+        )
+        _, approval_store = attach_stores(runner, state_dir=str(Path(tmp) / "state"))
+        event = make_event("network_port", "network_port")
+
+        pending = runner.recover(event)
+        request_id = pending.approval_request_record["request_id"]
+        decision = approval_store.approve(request_id, operator="tester")
+
+        assert decision["status"] == APPROVAL_STATUS_APPROVED
+
+        approved_result = runner.recover_after_approval(event, request_id)
+
+        assert approved_result.r15_gate is not None
+        assert approved_result.r15_gate.allowed_to_execute
+        assert approved_result.recovered
+        assert session.apply_calls == ["fix-network-1"]
+        assert session.rerun_calls == 1
+        assert approved_result.approval_decision_record["status"] == (
+            APPROVAL_STATUS_APPROVED
+        )
+
+
+def test_recover_after_approval_reruns_gate_and_blocks_changed_policy() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        session = FakeSession()
+        project = make_project(
+            dry_run=False,
+            require_human_approval_for_live_apply=True,
+        )
+        runner = make_runner(project, session)
+        _, approval_store = attach_stores(runner, state_dir=str(Path(tmp) / "state"))
+        event = make_event("network_port", "network_port")
+
+        pending = runner.recover(event)
+        request_id = pending.approval_request_record["request_id"]
+        approval_store.approve(request_id, operator="tester")
+
+        project.policy.rollback_on_failure = False
+        approved_result = runner.recover_after_approval(event, request_id)
+
+        assert approved_result.r15_gate is not None
+        assert not approved_result.r15_gate.allowed_to_execute
+        assert "rollback" in approved_result.r15_gate.downgrade_reason
+        assert session.apply_calls == []
+        assert session.rerun_calls == 0
+
+
+def test_recover_after_rejected_approval_does_not_execute() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        session = FakeSession()
+        runner = make_runner(
+            make_project(
+                dry_run=False,
+                require_human_approval_for_live_apply=True,
+            ),
+            session,
+        )
+        _, approval_store = attach_stores(runner, state_dir=str(Path(tmp) / "state"))
+        event = make_event("network_port", "network_port")
+
+        pending = runner.recover(event)
+        request_id = pending.approval_request_record["request_id"]
+        approval_store.reject(request_id, operator="tester")
+        rejected_result = runner.recover_after_approval(event, request_id)
+
+        assert rejected_result.r15_gate is not None
+        assert rejected_result.r15_gate.downgrade_reason == (
+            f"approval_status_not_approved:{APPROVAL_STATUS_REJECTED}"
+        )
+        assert session.apply_calls == []
+        assert session.rerun_calls == 0
+
+
+def test_recover_after_expired_approval_does_not_execute() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        session = FakeSession()
+        runner = make_runner(
+            make_project(
+                dry_run=False,
+                require_human_approval_for_live_apply=True,
+            ),
+            session,
+        )
+        _, approval_store = attach_stores(runner, state_dir=str(Path(tmp) / "state"))
+        event = make_event("network_port", "network_port")
+
+        pending = runner.recover(event)
+        request_id = pending.approval_request_record["request_id"]
+        approval_store.expire(request_id, operator="tester")
+        expired_result = runner.recover_after_approval(event, request_id)
+
+        assert expired_result.r15_gate is not None
+        assert expired_result.r15_gate.downgrade_reason == (
+            f"approval_status_not_approved:{APPROVAL_STATUS_EXPIRED}"
+        )
+        assert session.apply_calls == []
+        assert session.rerun_calls == 0
+
+
+def test_recover_after_approval_fingerprint_mismatch_does_not_execute() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        session = FakeSession()
+        runner = make_runner(
+            make_project(
+                dry_run=False,
+                require_human_approval_for_live_apply=True,
+            ),
+            session,
+        )
+        _, approval_store = attach_stores(runner, state_dir=str(Path(tmp) / "state"))
+        original_event = make_event("network_port", "network_port")
+        other_event = make_raw_event(
+            "network_port",
+            "network_port",
+            "network_port evidence for a different fingerprint",
+        )
+
+        pending = runner.recover(original_event)
+        request_id = pending.approval_request_record["request_id"]
+        approval_store.approve(request_id, operator="tester")
+        mismatch_result = runner.recover_after_approval(other_event, request_id)
+
+        assert mismatch_result.r15_gate is not None
+        assert mismatch_result.r15_gate.downgrade_reason == (
+            "approval_fingerprint_mismatch"
+        )
+        assert session.apply_calls == []
+        assert session.rerun_calls == 0
+
+
+def test_recover_after_approval_fix_id_mismatch_does_not_execute() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        session = FakeSession()
+        runner = make_runner(
+            make_project(
+                dry_run=False,
+                require_human_approval_for_live_apply=True,
+            ),
+            session,
+        )
+        _, approval_store = attach_stores(runner, state_dir=str(Path(tmp) / "state"))
+        event = make_event("network_port", "network_port")
+
+        pending = runner.recover(event)
+        request_id = pending.approval_request_record["request_id"]
+        approval_store.approve(request_id, operator="tester")
+
+        records = approval_store.read_all()
+        records[0]["selected_fix_id"] = "fix-gpu-1"
+        approval_store.approval_requests_path.write_text(
+            "\n".join(json.dumps(record, ensure_ascii=False) for record in records)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        mismatch_result = runner.recover_after_approval(event, request_id)
+
+        assert mismatch_result.r15_gate is not None
+        assert mismatch_result.r15_gate.downgrade_reason == "approval_fix_id_mismatch"
+        assert session.apply_calls == []
+        assert session.rerun_calls == 0

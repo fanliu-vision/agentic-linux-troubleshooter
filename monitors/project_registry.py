@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,13 @@ class SSHConfig:
     user: str = ""
     host: str = ""
     port: int = 22
+    key_path_env: str = ""
+    key_path: str = ""
+
+    def resolved_key_path(self) -> str:
+        env_name = self.key_path_env or "AGENTIC_TRACE_SSH_KEY_PATH"
+        from_env = os.environ.get(env_name, "") if env_name else ""
+        return str(from_env or self.key_path or "").strip()
 
 
 @dataclass
@@ -56,6 +64,7 @@ class PolicyConfig:
     auto_rerun_after_apply: bool = True
     auto_recovery_policy_enabled: bool = True
     auto_recovery_dry_run: bool = True
+    require_human_approval_for_live_apply: bool = False
     auto_recovery_fingerprint_cooldown_seconds: int = 3600
     auto_recovery_event_type_cooldown_seconds: int = 1800
     auto_recovery_project_cooldown_seconds: int = 600
@@ -124,6 +133,7 @@ class ProjectRegistry:
     @staticmethod
     def _parse_project(item: dict[str, Any]) -> ProjectConfig:
         ssh_data = item.get("ssh") or {}
+        _reject_inline_ssh_secrets(ssh_data)
         monitor_data = item.get("monitor") or {}
         policy_data = item.get("policy") or {}
         notification_data = item.get("notification") or {}
@@ -142,6 +152,8 @@ class ProjectRegistry:
                 user=str(ssh_data.get("user", "")),
                 host=str(ssh_data.get("host", "")),
                 port=int(ssh_data.get("port", 22)),
+                key_path_env=str(ssh_data.get("key_path_env", "")),
+                key_path=str(ssh_data.get("key_path", "")),
             ),
             monitor=MonitorConfig(
                 interval_seconds=int(monitor_data.get("interval_seconds", 5)),
@@ -174,6 +186,10 @@ class ProjectRegistry:
                     policy_data.get("auto_recovery_dry_run"),
                     True,
                 ),
+                require_human_approval_for_live_apply=_as_bool(
+                    policy_data.get("require_human_approval_for_live_apply"),
+                    False,
+                ),
                 auto_recovery_fingerprint_cooldown_seconds=int(
                     policy_data.get("auto_recovery_fingerprint_cooldown_seconds", 3600)
                 ),
@@ -195,4 +211,20 @@ class ProjectRegistry:
                 notify_on_rollback=_as_bool(notification_data.get("notify_on_rollback"), True),
                 notify_on_report_only=_as_bool(notification_data.get("notify_on_report_only"), True),
             ),
+        )
+
+
+def _reject_inline_ssh_secrets(ssh_data: dict[str, Any]) -> None:
+    forbidden = {
+        "password",
+        "passphrase",
+        "private_key",
+        "private_key_material",
+        "identity_file_content",
+    }
+    present = sorted(key for key in forbidden if key in ssh_data and ssh_data.get(key))
+    if present:
+        raise ValueError(
+            "ssh_credentials_must_not_be_in_project_config:"
+            + ",".join(present)
         )

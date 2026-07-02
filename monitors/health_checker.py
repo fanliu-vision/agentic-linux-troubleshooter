@@ -101,11 +101,17 @@ class ProjectHealthChecker:
         ssh_target = f"{ssh.user}@{ssh.host}"
         ssh_cmd = [
             "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
             "-p",
             str(ssh.port),
-            ssh_target,
-            command,
         ]
+        key_path = ssh.resolved_key_path()
+        if key_path:
+            ssh_cmd.extend(["-i", key_path])
+        ssh_cmd.extend([ssh_target, command])
 
         try:
             completed = subprocess.run(

@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>代理操作追踪</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <section id="authPanel" class="auth-panel hidden" aria-label="登录">
+      <form id="loginForm" class="login-form">
+        <h1>代理操作追踪</h1>
+        <label>
+          <span>操作员</span>
+          <input id="operatorInput" type="text" autocomplete="username" placeholder="operator">
+        </label>
+        <label>
+          <span>访问 token</span>
+          <input id="tokenInput" type="password" autocomplete="current-password" placeholder="AGENTIC_TRACE_UI_TOKEN">
+        </label>
+        <p class="login-hint">访问 token 是启动 UI 时设置的 AGENTIC_TRACE_UI_TOKEN 值。</p>
+        <button id="loginButton" class="primary" type="submit">登录</button>
+        <p id="loginError" class="error-text hidden"></p>
+      </form>
+    </section>
+
+    <div id="appShell" class="app-shell hidden">
+      <header class="topbar">
+        <div>
+          <h1>代理操作追踪</h1>
+          <p id="projectMeta" class="muted"></p>
+        </div>
+        <div class="topbar-actions">
+          <span id="operatorBadge" class="operator-badge">未登录</span>
+          <span id="workerBadge" class="worker-badge">worker 未连接</span>
+          <select id="projectSelect" aria-label="项目"></select>
+          <button id="refreshButton" type="button" title="刷新">刷新</button>
+          <button id="logoutButton" type="button">退出</button>
+        </div>
+      </header>
+
+      <section class="console-panel" aria-label="控制台">
+        <div class="console-heading">
+          <div>
+            <h2>控制台</h2>
+            <p id="consoleSummary" class="muted">选择项目后查看运行状态、事件、审批、任务和报告</p>
+          </div>
+          <div class="console-actions">
+            <button id="consoleConnectButton" type="button">连接项目</button>
+            <button id="consoleStartMonitorButton" type="button">启动监控</button>
+            <button id="consoleGenerateReportButton" type="button">生成首次报告</button>
+          </div>
+        </div>
+        <div class="console-grid">
+          <section class="console-card">
+            <h3>运行状态</h3>
+            <dl class="console-status-list">
+              <dt>连接</dt>
+              <dd id="consoleConnectionStatus">未连接</dd>
+              <dt>监控</dt>
+              <dd id="consoleMonitorStatus">未运行</dd>
+              <dt>Worker</dt>
+              <dd id="consoleWorkerStatus">未知</dd>
+            </dl>
+          </section>
+          <section class="console-card">
+            <h3>最新事件</h3>
+            <div id="consoleLatestEvents" class="console-list"></div>
+          </section>
+          <section class="console-card">
+            <h3>待审批</h3>
+            <div id="consolePendingApprovals" class="console-list"></div>
+          </section>
+          <section class="console-card">
+            <h3>最近 job</h3>
+            <div id="consoleRecentJobs" class="console-list"></div>
+          </section>
+          <section class="console-card">
+            <h3>最近报告</h3>
+            <div id="consoleRecentReports" class="console-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="metrics-strip" aria-label="总览">
+        <div class="metric">
+          <span class="metric-label">活动</span>
+          <strong id="metricEvents">0</strong>
+        </div>
+        <div class="metric">
+          <span class="metric-label">待办</span>
+          <strong id="metricPending">0</strong>
+        </div>
+        <div class="metric">
+          <span class="metric-label">已恢复</span>
+          <strong id="metricRecovered">0</strong>
+        </div>
+        <div class="metric">
+          <span class="metric-label">已屏蔽</span>
+          <strong id="metricBlocked">0</strong>
+        </div>
+      </section>
+
+      <section class="runtime-panel" aria-label="Runtime control">
+        <div class="runtime-heading">
+          <div>
+            <h2>运行控制</h2>
+            <p id="runtimeTarget" class="muted">尚未连接</p>
+          </div>
+          <div class="runtime-actions">
+            <button id="connectLocalButton" type="button">连接本地</button>
+            <button id="connectRemoteButton" type="button">连接远程</button>
+            <button id="healthCheckButton" type="button">健康检查</button>
+          </div>
+        </div>
+
+        <div class="runtime-grid">
+          <div class="runtime-cell">
+            <span class="cell-label">连接状态</span>
+            <strong id="connectionStatus" class="status-text">disconnected</strong>
+          </div>
+          <div class="runtime-cell">
+            <span class="cell-label">运行状态</span>
+            <strong id="runtimeStatus" class="status-text">disconnected</strong>
+          </div>
+          <div class="runtime-cell checks-cell">
+            <div class="cell-head">
+              <span class="cell-label">检查结果</span>
+              <span id="checksSummary" class="muted">0 项</span>
+            </div>
+            <ul id="healthChecks" class="check-list"></ul>
+          </div>
+          <div class="runtime-cell jobs-cell">
+            <div class="cell-head">
+              <span class="cell-label">最近任务</span>
+              <span id="jobsSummary" class="muted">0 个</span>
+            </div>
+            <ol id="jobList" class="job-list"></ol>
+          </div>
+        </div>
+      </section>
+
+      <section class="operations-panel" aria-label="Operations">
+        <div class="operations-heading">
+          <div>
+            <h2>操作区</h2>
+            <p id="operationStatus" class="muted">所有操作都会写入任务记录</p>
+          </div>
+        </div>
+        <div class="operation-actions">
+          <button id="opStartMonitor" type="button">启动监控</button>
+          <button id="opStopMonitor" type="button">停止监控</button>
+          <button id="opRefreshLogs" type="button">刷新日志</button>
+          <button id="opGenerateReport" type="button">生成报告</button>
+          <button id="opDryRunRecovery" type="button">执行 dry-run 恢复</button>
+          <button id="opLiveApply" class="danger" type="button">执行 live apply</button>
+          <button id="opRollbackLatest" class="danger" type="button">回滚最近一次修复</button>
+        </div>
+        <section id="jobLogPanel" class="job-log-panel hidden" aria-label="任务实时日志">
+          <div class="job-log-head">
+            <div>
+              <h3 id="jobLogTitle">任务日志</h3>
+              <p id="jobLogMeta" class="muted"></p>
+            </div>
+            <button id="jobLogRefreshButton" type="button">刷新日志</button>
+          </div>
+          <pre id="jobLogContent" class="job-log-content"></pre>
+        </section>
+      </section>
+
+      <section class="history-panel" aria-label="Recovery history">
+        <div class="history-heading">
+          <div>
+            <h2>回滚与恢复历史</h2>
+            <p id="historySummary" class="muted">展示已执行修复、字段变更、备份与回滚状态</p>
+          </div>
+          <button id="refreshHistoryButton" type="button">刷新历史</button>
+        </div>
+        <div id="recoveryHistoryList" class="history-list"></div>
+        <p id="recoveryHistoryEmpty" class="muted hidden">暂无恢复历史</p>
+      </section>
+
+      <main class="workspace">
+        <section class="event-panel" aria-label="事件">
+          <div class="panel-heading">
+            <h2>事件</h2>
+            <input id="eventFilter" type="search" placeholder="筛选" aria-label="筛选事件">
+          </div>
+          <div class="event-table-wrap">
+            <table class="event-table">
+              <thead>
+                <tr>
+                  <th>状态</th>
+                  <th>严重度</th>
+                  <th>event_type</th>
+                  <th>动作</th>
+                  <th>试运行</th>
+                  <th>审批</th>
+                </tr>
+              </thead>
+              <tbody id="eventRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="detail-panel" aria-label="Event detail">
+          <div id="emptyState" class="empty-state">未选择事件</div>
+          <div id="detailContent" class="detail-content hidden">
+            <div class="detail-header">
+              <div>
+                <h2 id="detailTitle"></h2>
+                <p id="detailSubtitle" class="muted"></p>
+              </div>
+              <span id="detailStatus" class="status-pill"></span>
+            </div>
+
+            <div class="detail-tabs" role="tablist" aria-label="详情视图">
+              <button id="detailTabEvidence" class="tab-button active" type="button">证据</button>
+              <button id="detailTabPolicy" class="tab-button" type="button">策略</button>
+              <button id="detailTabPlan" class="tab-button" type="button">修复计划</button>
+              <button id="detailTabApproval" class="tab-button" type="button">审批</button>
+              <button id="detailTabExecution" class="tab-button" type="button">执行记录</button>
+              <button id="detailTabReports" class="tab-button" type="button">报告</button>
+              <button id="detailTabAudit" class="tab-button" type="button">审计 JSON</button>
+            </div>
+
+            <div id="detailPaneEvidence" class="detail-pane">
+              <section class="detail-section">
+                <h3>证据</h3>
+                <dl id="evidenceList" class="kv-list"></dl>
+              </section>
+            </div>
+
+            <div id="detailPanePolicy" class="detail-pane hidden">
+              <section class="detail-section">
+                <h3>策略决策</h3>
+                <pre id="policyJson" class="json-block tall"></pre>
+              </section>
+            </div>
+
+            <div id="detailPanePlan" class="detail-pane hidden">
+              <section class="detail-section">
+                <h3>计划变更</h3>
+                <div class="table-wrap">
+                  <table class="edits-table">
+                    <thead>
+                      <tr>
+                        <th>字段</th>
+                        <th>旧值</th>
+                        <th>新值</th>
+                        <th>规则</th>
+                        <th>状态</th>
+                      </tr>
+                    </thead>
+                    <tbody id="plannedEdits"></tbody>
+                  </table>
+                </div>
+              </section>
+              <section class="detail-section">
+                <h3>回滚计划</h3>
+                <pre id="rollbackJson" class="json-block tall"></pre>
+              </section>
+            </div>
+
+            <div id="detailPaneApproval" class="detail-pane hidden">
+              <section class="detail-section">
+                <h3>审批</h3>
+                <div id="approvalPanel" class="approval-panel"></div>
+              </section>
+            </div>
+
+            <div id="detailPaneExecution" class="detail-pane hidden">
+              <section class="detail-section">
+                <h3>执行记录</h3>
+                <ol id="traceList" class="trace-list"></ol>
+              </section>
+            </div>
+
+            <div id="detailPaneReports" class="detail-pane hidden">
+              <section class="detail-section">
+                <div class="report-toolbar">
+                  <h3>报告中心</h3>
+                  <button id="refreshReportsButton" type="button">刷新报告</button>
+                </div>
+                <div id="reportGroups" class="report-groups"></div>
+                <p id="reportEmpty" class="muted hidden">暂无关联报告</p>
+              </section>
+
+              <section id="reportDetailBox" class="detail-section report-detail hidden">
+                <div class="report-detail-head">
+                  <div>
+                    <h3 id="reportTitle">报告详情</h3>
+                    <p id="reportMeta" class="muted"></p>
+                  </div>
+                  <span id="reportType" class="tag"></span>
+                </div>
+                <pre id="reportContent" class="json-block tall report-content"></pre>
+              </section>
+            </div>
+
+            <div id="detailPaneAudit" class="detail-pane hidden">
+              <section class="detail-section">
+                <h3>审计 JSON</h3>
+                <pre id="auditJson" class="json-block tall"></pre>
+              </section>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

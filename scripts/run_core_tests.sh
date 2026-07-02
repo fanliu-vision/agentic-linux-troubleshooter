@@ -14,6 +14,16 @@ cd "${PROJECT_ROOT}"
 "${PYTHON_BIN}" -m py_compile recovery/auto_recovery_runner.py
 "${PYTHON_BIN}" -m py_compile safe_recovery/registry_governance.py
 "${PYTHON_BIN}" -m py_compile monitors/cycle_summary_reporter.py
+"${PYTHON_BIN}" -m py_compile monitors/recovery_history_store.py
+"${PYTHON_BIN}" -m py_compile monitors/report_index_store.py
+"${PYTHON_BIN}" -m py_compile web_ui/approved_recovery_worker.py
+"${PYTHON_BIN}" -m py_compile web_ui/job_worker.py
+"${PYTHON_BIN}" -m py_compile web_ui/operation_runner.py
+"${PYTHON_BIN}" -m py_compile web_ui/recovery_history.py
+"${PYTHON_BIN}" -m py_compile web_ui/runtime_control.py
+"${PYTHON_BIN}" -m py_compile web_ui/security.py
+"${PYTHON_BIN}" -m py_compile web_ui/trace_data.py
+"${PYTHON_BIN}" -m py_compile web_ui/server.py
 
 "${PYTHON_BIN}" -m pytest tests -q
 

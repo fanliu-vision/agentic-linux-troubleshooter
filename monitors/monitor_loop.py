@@ -20,8 +20,16 @@ from notifiers import NotificationManager
 from monitors.daemon_logger import DaemonLogger
 from monitors.health_checker import ProjectHealthChecker
 from monitors.rate_limit_tracker import RateLimitTracker
+from monitors.report_index_store import (
+    REPORT_TYPE_AUTO_RECOVERY,
+    REPORT_TYPE_DIAGNOSTIC,
+    REPORT_TYPE_EVENT,
+    REPORT_TYPE_ROLLBACK,
+    ReportIndexStore,
+)
 from monitors.state_store import MonitorStateStore, ProjectMonitorState
 from monitors.cycle_summary_reporter import CycleEventRecord, CycleSummaryReporter
+from monitors.trace_store import TraceStore, ApprovalStore
 
 
 @dataclass
@@ -75,6 +83,31 @@ class MonitorLoop:
             project_id=self.project.project_id,
             state_dir=self.state_dir,
         )
+        self.trace_store = (
+            TraceStore(
+                project_id=self.project.project_id,
+                state_dir=self.state_dir,
+            )
+            if self.enable_persistent_state
+            else None
+        )
+        self.approval_store = (
+            ApprovalStore(
+                project_id=self.project.project_id,
+                state_dir=self.state_dir,
+                trace_store=self.trace_store,
+            )
+            if self.enable_persistent_state
+            else None
+        )
+        self.report_store = (
+            ReportIndexStore(
+                project_id=self.project.project_id,
+                state_dir=self.state_dir,
+            )
+            if self.enable_persistent_state
+            else None
+        )
 
         if self.enable_persistent_state:
             self.project_state: ProjectMonitorState = self.state_store.load()
@@ -92,6 +125,8 @@ class MonitorLoop:
         self.recovery_runner = AutoRecoveryRunner(
             project=self.project,
             session=self.session,
+            trace_store=self.trace_store,
+            approval_store=self.approval_store,
         )
         self.notification_manager = NotificationManager(
             project=self.project,
@@ -157,6 +192,24 @@ class MonitorLoop:
         for path in paths:
             if path and path not in self.reports_generated:
                 self.reports_generated.append(path)
+
+    def _index_report_paths(
+        self,
+        paths: list[str],
+        *,
+        report_type: str,
+        event: ErrorEvent | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        if self.report_store is None:
+            return []
+        return self.report_store.register_reports(
+            paths,
+            report_type=report_type,
+            fingerprint=event.fingerprint if event else "",
+            event_type=event.event_type if event else "",
+            metadata=metadata,
+        )
 
     def _expected_reports_for_event(self) -> int:
         return 2 if self.project.monitor.auto_report else 1
@@ -332,6 +385,28 @@ class MonitorLoop:
                 "fingerprint": event.fingerprint,
             }
         )
+
+    def _append_trace_stage(
+            self,
+            stage: str,
+            event: ErrorEvent,
+            payload: dict[str, Any] | None = None,
+    ) -> None:
+        if self.trace_store is None:
+            return
+
+        try:
+            self.trace_store.append(
+                stage,
+                event=event,
+                payload=payload or {},
+            )
+        except Exception as exc:
+            self.daemon_logger.warning(
+                f"failed to append trace stage: stage={stage}, "
+                f"fingerprint={event.fingerprint}, event_type={event.event_type}, "
+                f"error={type(exc).__name__}: {exc}"
+            )
 
     def request_stop(self, reason: str = "stop_requested") -> None:
         self._stop_requested = True
@@ -520,6 +595,17 @@ class MonitorLoop:
 
 
     def _handle_event(self, event: ErrorEvent) -> CycleEventRecord | None:
+        self._append_trace_stage(
+            "detected",
+            event,
+            payload={
+                "line_number": event.line_number,
+                "signature": event.signature,
+                "matched_keywords": list(event.matched_keywords),
+                "raw_excerpt_present": bool(event.raw_excerpt),
+            },
+        )
+
         print("")
         print("=" * 100)
         print("[ALERT] Error event detected")
@@ -551,6 +637,29 @@ class MonitorLoop:
         recovery_result = self.recovery_runner.recover(event)
         self._record_llm_fallback_from_messages(recovery_result.messages)
         self._append_report_paths(recovery_result.report_paths)
+        self._index_report_paths(
+            recovery_result.report_paths,
+            report_type=REPORT_TYPE_AUTO_RECOVERY,
+            event=event,
+            metadata={
+                "source": "monitor_loop_recovery",
+                "recovered": recovery_result.recovered,
+                "action": recovery_result.decision.action,
+                "fix_id": recovery_result.decision.fix_id or "",
+                "rollback_executed": recovery_result.rollback_executed,
+                "rollback_success": recovery_result.rollback_success,
+            },
+        )
+        if recovery_result.rollback_executed:
+            self._index_report_paths(
+                recovery_result.report_paths,
+                report_type=REPORT_TYPE_ROLLBACK,
+                event=event,
+                metadata={
+                    "source": "monitor_loop_recovery",
+                    "rollback_success": recovery_result.rollback_success,
+                },
+            )
         if self.enable_persistent_state:
             self.project_state.reports_generated_total += len(recovery_result.report_paths)
             if recovery_result.report_paths:
@@ -648,6 +757,15 @@ class MonitorLoop:
 
                 post_notification_report_paths.append(str(post_report_path))
                 self._append_report_paths([str(post_report_path)])
+                self._index_report_paths(
+                    [str(post_report_path)],
+                    report_type=REPORT_TYPE_EVENT,
+                    event=event,
+                    metadata={
+                        "source": "post_notification",
+                        "report_source": source,
+                    },
+                )
 
                 if str(post_report_path) not in recovery_result.report_paths:
                     recovery_result.report_paths.append(str(post_report_path))
@@ -825,6 +943,14 @@ class MonitorLoop:
                             self.reports_generated.remove(summary_path)
 
                         self.reports_generated.insert(0, summary_path)
+                        self._index_report_paths(
+                            [summary_path],
+                            report_type=REPORT_TYPE_DIAGNOSTIC,
+                            metadata={
+                                "source": "cycle_summary",
+                                "event_count": len(cycle_records),
+                            },
+                        )
 
                         if self.enable_persistent_state:
                             self.project_state.reports_generated_total += 1
@@ -1058,6 +1184,8 @@ class MonitorLoop:
                 user=self.project.ssh.user,
                 host=self.project.ssh.host,
                 port=self.project.ssh.port,
+                name=self.project.project_id,
+                key_path=self.project.ssh.resolved_key_path(),
             )
 
         return session

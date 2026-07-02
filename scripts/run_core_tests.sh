@@ -24,6 +24,8 @@ cd "${PROJECT_ROOT}"
 "${PYTHON_BIN}" -m py_compile web_ui/security.py
 "${PYTHON_BIN}" -m py_compile web_ui/trace_data.py
 "${PYTHON_BIN}" -m py_compile web_ui/server.py
+"${PYTHON_BIN}" -m py_compile scripts/preflight_deploy.py
+"${PYTHON_BIN}" -m py_compile scripts/r18_real_log_shadow_gate.py
 
 "${PYTHON_BIN}" -m pytest tests -q
 

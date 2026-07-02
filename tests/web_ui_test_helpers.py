@@ -96,6 +96,7 @@ def make_server_context(
     state_dir: Path,
     output_root: Path,
     auth_token: str = "secret-token",
+    auth_role_tokens: dict[str, str] | None = None,
     auth_enabled: bool = True,
 ) -> SimpleNamespace:
     return SimpleNamespace(
@@ -103,17 +104,26 @@ def make_server_context(
         state_dir=str(state_dir),
         output_root=str(output_root),
         quiet=True,
-        auth_manager=AuthManager(token=auth_token, enabled=auth_enabled),
+        auth_manager=AuthManager(
+            token=auth_token,
+            role_tokens=auth_role_tokens or {},
+            enabled=auth_enabled,
+        ),
         job_daemon=None,
     )
 
 
-def login_headers(server: Any, *, operator: str = "tester") -> dict[str, str]:
+def login_headers(
+    server: Any,
+    *,
+    operator: str = "tester",
+    token: str = "secret-token",
+) -> dict[str, str]:
     response = call_handler(
         server,
         "POST",
         "/api/auth/login",
-        body={"operator": operator, "token": "secret-token"},
+        body={"operator": operator, "token": token},
     )
     assert response.status == 200
     cookie = response.headers["Set-Cookie"].split(";", 1)[0]

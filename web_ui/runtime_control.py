@@ -173,7 +173,9 @@ class JobStore:
         *,
         action: str,
         operator: str = "web-ui",
+        role: str = "",
         payload: dict[str, Any] | None = None,
+        request_audit: dict[str, Any] | None = None,
         runtime_status: str = RUNTIME_STATUS_DISCONNECTED,
         summary: str = "",
         timeout_seconds: int = DEFAULT_JOB_TIMEOUT_SECONDS,
@@ -195,10 +197,12 @@ class JobStore:
             "status": JOB_STATUS_QUEUED,
             "runtime_status": runtime_status,
             "operator": operator,
+            "role": role,
             "queued_by": queued_by,
             "summary": summary,
             "payload": _jsonable(dict(payload or {})),
             "result": {},
+            "request_audit": _jsonable(dict(request_audit or {})),
             "attempt": 0,
             "max_attempts": max(1, int(max_attempts or DEFAULT_JOB_MAX_ATTEMPTS)),
             "timeout_seconds": max(1, int(timeout_seconds or DEFAULT_JOB_TIMEOUT_SECONDS)),
@@ -210,7 +214,12 @@ class JobStore:
             "log_path": str(self.job_log_path(job_id)),
         }
         self._append(record)
-        self.append_log(job_id, "queued", summary or f"{action} queued")
+        self.append_log(
+            job_id,
+            "queued",
+            summary or f"{action} queued",
+            {"operator": operator, "role": role, "request_audit": request_audit or {}},
+        )
         return record
 
     def mark_running(
@@ -327,11 +336,27 @@ class JobStore:
                 return row
         return {}
 
-    def request_cancel(self, job_id: str, *, operator: str = "web-ui") -> dict[str, Any]:
+    def request_cancel(
+        self,
+        job_id: str,
+        *,
+        operator: str = "web-ui",
+        role: str = "",
+        request_audit: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         latest = self.get(job_id)
         status = str(latest.get("status", ""))
         if status in JOB_TERMINAL_STATUSES:
-            self.append_log(job_id, "cancel_ignored", "job is already terminal", {"operator": operator})
+            self.append_log(
+                job_id,
+                "cancel_ignored",
+                "job is already terminal",
+                {
+                    "operator": operator,
+                    "role": role,
+                    "request_audit": request_audit or {},
+                },
+            )
             return latest
 
         now = _now_iso()
@@ -348,12 +373,23 @@ class JobStore:
                 },
                 cancel_requested_at=now,
                 cancel_requested_by=operator,
+                cancel_requested_role=role,
+                request_audit=request_audit or latest.get("request_audit", {}),
                 lease_owner="",
                 lease_expires_at="",
             )
             record["finished_at"] = now
             self._append(record)
-            self.append_log(job_id, "canceled", "job canceled before execution", {"operator": operator})
+            self.append_log(
+                job_id,
+                "canceled",
+                "job canceled before execution",
+                {
+                    "operator": operator,
+                    "role": role,
+                    "request_audit": request_audit or {},
+                },
+            )
             return record
 
         record = self._update(
@@ -363,16 +399,34 @@ class JobStore:
             summary="取消请求已记录",
             cancel_requested_at=now,
             cancel_requested_by=operator,
+            cancel_requested_role=role,
+            request_audit=request_audit or latest.get("request_audit", {}),
         )
         self._append(record)
-        self.append_log(job_id, "cancel_requested", "cancel requested", {"operator": operator})
+        self.append_log(
+            job_id,
+            "cancel_requested",
+            "cancel requested",
+            {
+                "operator": operator,
+                "role": role,
+                "request_audit": request_audit or {},
+            },
+        )
         return record
 
     def is_cancel_requested(self, job_id: str) -> bool:
         latest = self.get(job_id)
         return bool(latest.get("cancel_requested_at")) or latest.get("status") == JOB_STATUS_CANCEL_REQUESTED
 
-    def retry(self, job_id: str, *, operator: str = "web-ui") -> dict[str, Any]:
+    def retry(
+        self,
+        job_id: str,
+        *,
+        operator: str = "web-ui",
+        role: str = "",
+        request_audit: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         latest = self.get(job_id)
         status = str(latest.get("status", ""))
         if status in JOB_ACTIVE_STATUSES:
@@ -383,7 +437,9 @@ class JobStore:
         retry = self.create(
             action=str(latest.get("action", "")),
             operator=operator,
+            role=role,
             payload=payload,
+            request_audit=request_audit or dict(latest.get("request_audit") or {}),
             runtime_status=str(latest.get("runtime_status") or RUNTIME_STATUS_CONNECTED),
             summary=f"重试任务已排队：{latest.get('action', '')}",
             timeout_seconds=int(latest.get("timeout_seconds") or DEFAULT_JOB_TIMEOUT_SECONDS),
@@ -392,7 +448,17 @@ class JobStore:
         )
         retry["retry_of"] = job_id
         self._append(retry)
-        self.append_log(retry["job_id"], "retry", "retry queued", {"retry_of": job_id, "operator": operator})
+        self.append_log(
+            retry["job_id"],
+            "retry",
+            "retry queued",
+            {
+                "retry_of": job_id,
+                "operator": operator,
+                "role": role,
+                "request_audit": request_audit or {},
+            },
+        )
         return retry
 
     def lease_next(
@@ -689,6 +755,8 @@ class RuntimeControlService:
         action: str,
         connection_mode: str = "",
         operator: str = "web-ui",
+        role: str = "",
+        request_audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if action not in {"connect", "health_check"}:
             raise ValueError(f"unsupported_connection_action:{action}")
@@ -696,7 +764,9 @@ class RuntimeControlService:
         job = self.job_store.create(
             action=action,
             operator=operator,
+            role=role,
             payload={"connection_mode": mode},
+            request_audit=request_audit,
             runtime_status=RUNTIME_STATUS_CONNECTING,
             summary=f"{action}:{mode} queued",
             timeout_seconds=max(SSH_TIMEOUT_SECONDS * 4, 45),
@@ -749,12 +819,16 @@ class RuntimeControlService:
         *,
         action: str,
         operator: str,
+        role: str = "",
         payload: dict[str, Any] | None = None,
+        request_audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.job_store.create(
             action=action,
             operator=operator,
+            role=role,
             payload=payload,
+            request_audit=request_audit,
             runtime_status=self.runtime()["runtime_status"],
         )
 

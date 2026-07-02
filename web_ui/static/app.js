@@ -240,9 +240,23 @@ const ERROR_EXPLANATIONS = {
   confirmation_required: "该操作需要二次确认。",
   invalid_token: "访问 token 不正确。请使用启动 UI 时设置的 AGENTIC_TRACE_UI_TOKEN 值。",
   job_not_terminal: "只有已结束的任务才能重试。",
+  permission_denied: "当前角色没有执行该操作的权限。",
   unsupported_operation: "该操作不在 UI 受控 allowlist 中。",
 };
 
+const OPERATION_PERMISSIONS = {
+  start_monitor: "operate",
+  stop_monitor: "operate",
+  refresh_logs: "operate",
+  generate_report: "operate",
+  dry_run_recovery: "operate",
+  live_apply: "live_apply",
+  rollback_latest: "rollback",
+};
+const CONNECTION_PERMISSION = "operate";
+const APPROVAL_PERMISSION = "approve";
+const ROLLBACK_PERMISSION = "rollback";
+const HIGH_RISK_RETRY_PERMISSION = "retry_high_risk";
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running", "cancel_requested"]);
 const RETRYABLE_JOB_STATUSES = new Set(["failed", "blocked", "canceled", "timed_out"]);
 const HIGH_RISK_JOB_ACTIONS = new Set(["live_apply", "rollback_latest", "approved_recovery_job"]);
@@ -352,10 +366,22 @@ function renderAuth() {
   els.authPanel.classList.toggle("hidden", authenticated);
   els.appShell.classList.toggle("hidden", !authenticated);
   els.operatorBadge.textContent = authenticated
-    ? `操作员：${text(state.auth.operator, "operator")}`
+    ? `操作员：${text(state.auth.operator, "operator")} · ${display(state.auth.role, state.auth.role || "viewer")}`
     : "未登录";
   els.loginButton.disabled = state.loadingLogin;
   els.loginButton.textContent = state.loadingLogin ? "登录中" : "登录";
+}
+
+function hasPermission(permission) {
+  return new Set(state.auth?.permissions || []).has(permission);
+}
+
+function canRunOperation(action) {
+  return hasPermission(OPERATION_PERMISSIONS[action] || "operate");
+}
+
+function canUseConnectionActions() {
+  return hasPermission(CONNECTION_PERMISSION);
 }
 
 function showLoginError(message) {
@@ -603,9 +629,11 @@ function renderRuntime() {
   els.jobsSummary.textContent = `${jobs.length} 个`;
 
   const busy = Boolean(state.loadingRuntimeAction);
-  els.connectLocalButton.disabled = busy;
-  els.connectRemoteButton.disabled = busy;
-  els.healthCheckButton.disabled = busy;
+  const canConnect = canUseConnectionActions();
+  els.connectLocalButton.disabled = busy || !canConnect;
+  els.connectRemoteButton.disabled = busy || !canConnect;
+  els.healthCheckButton.disabled = busy || !canConnect;
+  els.consoleConnectButton.disabled = busy || !canConnect;
   els.connectLocalButton.textContent = state.loadingRuntimeAction === "local"
     ? "连接中"
     : "连接本地";
@@ -615,6 +643,9 @@ function renderRuntime() {
   els.healthCheckButton.textContent = state.loadingRuntimeAction === "health"
     ? "检查中"
     : "健康检查";
+  els.consoleConnectButton.textContent = state.loadingRuntimeAction
+    ? "连接中"
+    : "连接项目";
 
   renderChecks(checks);
   renderJobs(jobs);
@@ -633,9 +664,11 @@ function renderOperationButtons() {
     [els.opRollbackLatest, "rollback_latest", "回滚最近一次修复"],
   ];
   buttons.forEach(([button, action, label]) => {
-    button.disabled = Boolean(state.loadingOperation);
+    button.disabled = Boolean(state.loadingOperation) || !canRunOperation(action);
     button.textContent = state.loadingOperation === action ? "提交中" : label;
   });
+  els.consoleStartMonitorButton.disabled = Boolean(state.loadingOperation) || !canRunOperation("start_monitor");
+  els.consoleGenerateReportButton.disabled = Boolean(state.loadingOperation) || !canRunOperation("generate_report");
 }
 
 function renderRecoveryHistory() {
@@ -660,7 +693,7 @@ function recoveryHistoryItem(record) {
     type: "button",
     class: record.rollback_available ? "danger" : "",
     text: state.loadingHistoryRollback === record.identity ? "回滚中" : "回滚",
-    disabled: !record.rollback_available || Boolean(state.loadingHistoryRollback),
+    disabled: !record.rollback_available || Boolean(state.loadingHistoryRollback) || !hasPermission(ROLLBACK_PERMISSION),
     title: record.rollback_available ? "回滚这条最新修复" : "只有最新未回滚记录可回滚",
   });
   button.addEventListener("click", () => rollbackHistory(record.identity));
@@ -794,14 +827,18 @@ function renderJobs(jobs) {
     const cancelButton = el("button", {
       type: "button",
       text: state.loadingJobAction === `cancel:${job.job_id}` ? "取消中" : "取消",
-      disabled: !ACTIVE_JOB_STATUSES.has(job.status) || Boolean(state.loadingJobAction),
+      disabled: !ACTIVE_JOB_STATUSES.has(job.status)
+        || Boolean(state.loadingJobAction)
+        || !hasPermission(HIGH_RISK_JOB_ACTIONS.has(job.action) ? HIGH_RISK_RETRY_PERMISSION : "operate"),
     });
     cancelButton.addEventListener("click", () => cancelJob(job.job_id));
 
     const retryButton = el("button", {
       type: "button",
       text: state.loadingJobAction === `retry:${job.job_id}` ? "重试中" : "重试",
-      disabled: !RETRYABLE_JOB_STATUSES.has(job.status) || Boolean(state.loadingJobAction),
+      disabled: !RETRYABLE_JOB_STATUSES.has(job.status)
+        || Boolean(state.loadingJobAction)
+        || !hasPermission(HIGH_RISK_JOB_ACTIONS.has(job.action) ? HIGH_RISK_RETRY_PERMISSION : "operate"),
     });
     if (HIGH_RISK_JOB_ACTIONS.has(job.action)) {
       retryButton.classList.add("danger");
@@ -1157,13 +1194,13 @@ function renderApprovalPanel(detail) {
       class: "primary",
       text: state.loadingApproval ? "批准中" : "批准",
       type: "button",
-      disabled: state.loadingApproval,
+      disabled: state.loadingApproval || !hasPermission(APPROVAL_PERMISSION),
     });
     const rejectButton = el("button", {
       class: "danger",
       text: state.loadingApproval ? "拒绝中" : "拒绝",
       type: "button",
-      disabled: state.loadingApproval,
+      disabled: state.loadingApproval || !hasPermission(APPROVAL_PERMISSION),
     });
 
     approveButton.addEventListener("click", () => submitApproval(request.request_id, "approve", ""));
@@ -1734,6 +1771,21 @@ async function loadAuthStatus() {
   return Boolean(state.auth.authenticated);
 }
 
+async function loadProjectsFromServer() {
+  const projectData = await api("/api/projects");
+  state.projects = projectData.projects || [];
+  const params = new URLSearchParams(window.location.search);
+  const requestedProject = params.get("project") || "";
+  state.projectId = requestedProject
+    || state.projectId
+    || state.projects[0]?.project_id
+    || "";
+  if (state.projectId && !state.projects.some((project) => project.project_id === state.projectId)) {
+    state.projectId = state.projects[0]?.project_id || "";
+  }
+  renderProjects();
+}
+
 async function login(event) {
   event.preventDefault();
   if (state.loadingLogin) {
@@ -1754,6 +1806,7 @@ async function login(event) {
     els.tokenInput.value = "";
     renderAuth();
     if (state.auth.authenticated) {
+      await loadProjectsFromServer();
       await loadProject();
       startPolling();
     }
@@ -1796,11 +1849,7 @@ async function init() {
     clearDetail("未登录");
     return;
   }
-  const projectData = await api("/api/projects");
-  state.projects = projectData.projects || [];
-  const params = new URLSearchParams(window.location.search);
-  state.projectId = params.get("project") || state.projects[0]?.project_id || "";
-  renderProjects();
+  await loadProjectsFromServer();
   await loadProject();
   startPolling();
 }

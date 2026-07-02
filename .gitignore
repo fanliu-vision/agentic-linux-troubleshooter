@@ -23,6 +23,8 @@ acceptance_artifacts/
 # Environment / secrets
 .env
 .env.*
+configs/*.local.yaml
+configs/*.private.yaml
 *.pem
 *.key
 id_rsa

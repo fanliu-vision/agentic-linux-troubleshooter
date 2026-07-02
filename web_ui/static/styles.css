@@ -260,6 +260,10 @@ textarea {
   padding: 16px;
 }
 
+.app-shell > * {
+  min-width: 0;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -1007,8 +1011,14 @@ th {
   padding-bottom: 16px;
 }
 
+.detail-content > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .detail-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 12px 16px 0;
 }
@@ -1304,6 +1314,18 @@ th {
   }
 
   .topbar,
+  .console-panel,
+  .metrics-strip,
+  .runtime-panel,
+  .operations-panel,
+  .history-panel,
+  .workspace {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .topbar,
   .panel-heading,
   .detail-header {
     align-items: stretch;
@@ -1311,11 +1333,21 @@ th {
   }
 
   .topbar-actions,
+  .topbar > *,
+  .console-heading > *,
+  .runtime-heading > *,
+  .history-heading > *,
+  .history-item-head > *,
+  .detail-header > *,
+  .detail-tabs,
+  .detail-pane,
   .panel-heading input,
   .topbar-actions select,
   .topbar-actions button,
   .operator-badge,
   .worker-badge {
+    min-width: 0;
+    max-width: 100%;
     width: 100%;
   }
 

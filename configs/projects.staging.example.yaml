@@ -1,0 +1,168 @@
+# Staging dry-run profiles for real or production-like Linux services.
+# Copy this file to a private config, replace host/path/user values with your
+# staging environment, and keep secrets in environment variables.
+projects:
+  - project_id: staging_web_api_remote
+    name: Staging Web API Remote Dry-Run
+    mode: remote
+    owner: platform-api
+    owner_contact: file
+    ssh:
+      user: deploy
+      host: staging-api-01.internal
+      port: 22
+      key_path_env: AGENTIC_TRACE_STAGING_API_SSH_KEY
+    remote_project_dir: /srv/staging/commerce-api/current
+    run_command: /srv/staging/commerce-api/current/.venv/bin/gunicorn app.asgi:application --config /srv/staging/commerce-api/shared/gunicorn.conf.py
+    log_files:
+      - /srv/staging/commerce-api/shared/logs/application.log
+      - /srv/staging/commerce-api/shared/logs/gunicorn-error.log
+      - /var/log/nginx/staging-commerce-api-error.log
+    monitor:
+      interval_seconds: 20
+      tail_lines: 500
+      remote_watermark_enabled: true
+      remote_watermark_shadow: true
+      remote_log_max_bytes_per_poll: 100000
+      auto_report: true
+      max_events_per_run: 6
+    policy:
+      auto_recover: true
+      auto_recovery_policy_enabled: true
+      auto_recovery_dry_run: true
+      require_human_approval_for_live_apply: true
+      rollback_on_failure: true
+      auto_rerun_after_apply: false
+      auto_recovery_fingerprint_cooldown_seconds: 7200
+      auto_recovery_event_type_cooldown_seconds: 3600
+      auto_recovery_project_cooldown_seconds: 1800
+      allow_auto_apply:
+        - fix-network-1
+        - fix-cache-backend-1
+        - fix-optional-integration-1
+        - fix-observability-export-1
+        - fix-notification-sink-1
+      escalation_required:
+        - disk
+        - process_kill
+        - permission
+        - auth_cert
+        - dependency_service
+        - container_k8s
+    notification:
+      enabled: true
+      channels:
+        - file
+      alerts_dir: outputs/alerts
+      webhook_url_env: AGENTIC_TRACE_STAGING_WEBHOOK_URL
+      notify_on_recovered: true
+      notify_on_escalation: true
+      notify_on_rollback: true
+      notify_on_report_only: true
+
+  - project_id: staging_worker_remote
+    name: Staging Queue Worker Remote Dry-Run
+    mode: remote
+    owner: platform-worker
+    owner_contact: file
+    ssh:
+      user: deploy
+      host: staging-worker-01.internal
+      port: 22
+      key_path_env: AGENTIC_TRACE_STAGING_WORKER_SSH_KEY
+    remote_project_dir: /srv/staging/async-worker/current
+    run_command: /srv/staging/async-worker/current/.venv/bin/celery -A worker_app worker --loglevel=INFO --concurrency=4
+    log_files:
+      - /srv/staging/async-worker/shared/logs/worker.log
+      - /srv/staging/async-worker/shared/logs/scheduler.log
+      - /var/log/supervisor/staging-worker.err.log
+    monitor:
+      interval_seconds: 30
+      tail_lines: 800
+      remote_watermark_enabled: true
+      remote_watermark_shadow: true
+      remote_log_max_bytes_per_poll: 150000
+      auto_report: true
+      max_events_per_run: 8
+    policy:
+      auto_recover: true
+      auto_recovery_policy_enabled: true
+      auto_recovery_dry_run: true
+      require_human_approval_for_live_apply: true
+      rollback_on_failure: true
+      auto_rerun_after_apply: false
+      auto_recovery_fingerprint_cooldown_seconds: 7200
+      auto_recovery_event_type_cooldown_seconds: 3600
+      auto_recovery_project_cooldown_seconds: 1800
+      allow_auto_apply:
+        - fix-cache-1
+        - fix-cache-backend-1
+        - fix-queue-backpressure-1
+        - fix-worker-1
+        - fix-optional-service-1
+        - fix-observability-export-1
+      escalation_required:
+        - disk
+        - host_resource
+        - process_kill
+        - permission
+        - dependency_service
+        - slurm
+    notification:
+      enabled: true
+      channels:
+        - file
+      alerts_dir: outputs/alerts
+      webhook_url_env: AGENTIC_TRACE_STAGING_WORKER_WEBHOOK_URL
+      notify_on_recovered: true
+      notify_on_escalation: true
+      notify_on_rollback: true
+      notify_on_report_only: true
+
+  - project_id: staging_etl_local
+    name: Staging ETL Local Dry-Run
+    mode: local
+    owner: data-platform
+    owner_contact: file
+    project_dir: /srv/staging/ledger-etl/current
+    run_command: /srv/staging/ledger-etl/current/.venv/bin/python -m ledger_etl.jobs.daily_close --config /srv/staging/ledger-etl/shared/config.json
+    log_files:
+      - /srv/staging/ledger-etl/shared/logs/daily-close.log
+      - /srv/staging/ledger-etl/shared/logs/exporter.log
+      - /var/log/agentic-staging/ledger-etl-wrapper.log
+    monitor:
+      interval_seconds: 45
+      tail_lines: 1000
+      auto_report: true
+      max_events_per_run: 6
+    policy:
+      auto_recover: true
+      auto_recovery_policy_enabled: true
+      auto_recovery_dry_run: true
+      require_human_approval_for_live_apply: true
+      rollback_on_failure: true
+      auto_rerun_after_apply: false
+      auto_recovery_fingerprint_cooldown_seconds: 10800
+      auto_recovery_event_type_cooldown_seconds: 5400
+      auto_recovery_project_cooldown_seconds: 1800
+      allow_auto_apply:
+        - fix-optional-dep-1
+        - fix-optional-integration-1
+        - fix-notification-sink-1
+        - fix-observability-export-1
+      escalation_required:
+        - disk
+        - host_resource
+        - permission
+        - auth_cert
+        - dependency_service
+        - config_error
+    notification:
+      enabled: true
+      channels:
+        - file
+      alerts_dir: outputs/alerts
+      notify_on_recovered: true
+      notify_on_escalation: true
+      notify_on_rollback: true
+      notify_on_report_only: true

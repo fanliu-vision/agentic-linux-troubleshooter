@@ -4,6 +4,7 @@ import argparse
 import json
 import mimetypes
 import os
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,11 +27,28 @@ from web_ui.security import (
     AuthManager,
     auth_payload,
     confirmation_missing,
+    has_permission,
+    PERMISSION_APPROVE,
+    PERMISSION_LIVE_APPLY,
+    PERMISSION_OPERATE,
+    PERMISSION_READ,
+    PERMISSION_RETRY_HIGH_RISK,
+    PERMISSION_ROLLBACK,
 )
 from web_ui.trace_data import TraceUiDataService
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+HIGH_RISK_JOB_ACTIONS = {"live_apply", "rollback_latest", "approved_recovery_job"}
+OPERATION_PERMISSIONS = {
+    "start_monitor": PERMISSION_OPERATE,
+    "stop_monitor": PERMISSION_OPERATE,
+    "refresh_logs": PERMISSION_OPERATE,
+    "generate_report": PERMISSION_OPERATE,
+    "dry_run_recovery": PERMISSION_OPERATE,
+    "live_apply": PERMISSION_LIVE_APPLY,
+    "rollback_latest": PERMISSION_ROLLBACK,
+}
 
 
 def _json_bytes(data: dict[str, Any] | list[Any]) -> bytes:
@@ -130,6 +148,9 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
         context = self._auth_context()
         return context.operator or "web-ui"
 
+    def _role(self) -> str:
+        return self._auth_context().role
+
     @staticmethod
     def _is_auth_path(path: str) -> bool:
         return path in {"/api/auth/status", "/api/auth/login", "/api/auth/logout"}
@@ -144,6 +165,28 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
         )
         return False
 
+    def _require_permission(
+        self,
+        permission: str,
+        *,
+        action: str = "",
+        project_id: str = "",
+    ) -> bool:
+        context = self._auth_context()
+        if has_permission(context, permission):
+            return True
+        self._send_json(
+            {
+                "error": "permission_denied",
+                "required_permission": permission,
+                "action": action,
+                "project_id": project_id,
+                "auth": auth_payload(context),
+            },
+            status=HTTPStatus.FORBIDDEN,
+        )
+        return False
+
     def _require_csrf(self) -> bool:
         context = self._auth_context()
         token = self.headers.get("X-CSRF-Token", "")
@@ -154,6 +197,37 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
             status=HTTPStatus.FORBIDDEN,
         )
         return False
+
+    def _request_audit(
+        self,
+        *,
+        action: str,
+        project_id: str = "",
+        body: dict[str, Any] | None = None,
+        request_id: str = "",
+        fingerprint: str = "",
+        fix_id: str = "",
+        result: str = "accepted",
+    ) -> dict[str, Any]:
+        body = dict(body or {})
+        client_address = getattr(self, "client_address", ("", 0))
+        remote_addr = ""
+        if isinstance(client_address, tuple) and client_address:
+            remote_addr = str(client_address[0])
+        return {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "operator": self._operator(),
+            "role": self._role(),
+            "action": action,
+            "project_id": project_id,
+            "fingerprint": fingerprint or str(body.get("fingerprint", "")),
+            "request_id": request_id or str(body.get("request_id", "")),
+            "fix_id": fix_id or str(body.get("fix_id", "")),
+            "confirmation_action": str(body.get("confirmation_action", "")),
+            "remote_addr": remote_addr,
+            "user_agent": self.headers.get("User-Agent", ""),
+            "result": result,
+        }
 
     def _service(self, project_id: str) -> TraceUiDataService:
         return TraceUiDataService(
@@ -208,6 +282,8 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                 return
 
             if parts == ["api", "projects"]:
+                if not self._require_permission(PERMISSION_READ, action="projects"):
+                    return
                 service = TraceUiDataService(
                     project_id="",
                     state_dir=getattr(self.server, "state_dir", "state"),
@@ -218,27 +294,37 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
 
             if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "overview":
                 project_id = parts[2]
+                if not self._require_permission(PERMISSION_READ, action="overview", project_id=project_id):
+                    return
                 self._send_json(self._service(project_id).overview())
                 return
 
             if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "events":
                 project_id = parts[2]
+                if not self._require_permission(PERMISSION_READ, action="events", project_id=project_id):
+                    return
                 self._send_json({"events": self._service(project_id).events()})
                 return
 
             if len(parts) == 5 and parts[:2] == ["api", "projects"] and parts[3] == "events":
                 project_id = parts[2]
+                if not self._require_permission(PERMISSION_READ, action="event_detail", project_id=project_id):
+                    return
                 fingerprint = parts[4]
                 self._send_json(self._service(project_id).event_detail(fingerprint))
                 return
 
             if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "runtime":
                 project_id = parts[2]
+                if not self._require_permission(PERMISSION_READ, action="runtime", project_id=project_id):
+                    return
                 self._send_json(self._runtime_service(project_id).runtime())
                 return
 
             if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "jobs":
                 project_id = parts[2]
+                if not self._require_permission(PERMISSION_READ, action="jobs", project_id=project_id):
+                    return
                 self._send_json(
                     self._runtime_service(project_id).jobs(
                         limit=_int_query(query, "limit", 20),
@@ -254,26 +340,36 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                 and parts[5] == "log"
             ):
                 project_id = parts[2]
+                if not self._require_permission(PERMISSION_READ, action="job_log", project_id=project_id):
+                    return
                 job_id = parts[4]
                 self._send_json(self._job_store(project_id).job_log(job_id))
                 return
 
             if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "worker":
+                project_id = parts[2]
+                if not self._require_permission(PERMISSION_READ, action="worker", project_id=project_id):
+                    return
                 daemon = getattr(self.server, "job_daemon", None)
                 self._send_json(
                     {
-                        "project_id": parts[2],
+                        "project_id": project_id,
                         "worker": daemon.status() if daemon else {"running": False},
                     }
                 )
                 return
 
             if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "operations":
+                project_id = parts[2]
+                if not self._require_permission(PERMISSION_READ, action="operations", project_id=project_id):
+                    return
                 self._send_json({"operations": OperationRunner.operations()})
                 return
 
             if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "reports":
                 project_id = parts[2]
+                if not self._require_permission(PERMISSION_READ, action="reports", project_id=project_id):
+                    return
                 store = self._report_store(project_id)
                 self._send_json(
                     {
@@ -289,6 +385,8 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
 
             if len(parts) == 5 and parts[:2] == ["api", "projects"] and parts[3] == "reports":
                 project_id = parts[2]
+                if not self._require_permission(PERMISSION_READ, action="report_detail", project_id=project_id):
+                    return
                 report_id = unquote(parts[4])
                 self._send_json(self._report_store(project_id).detail(report_id))
                 return
@@ -299,6 +397,8 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                 and parts[3] == "recovery-history"
             ):
                 project_id = parts[2]
+                if not self._require_permission(PERMISSION_READ, action="recovery_history", project_id=project_id):
+                    return
                 self._send_json(
                     self._recovery_history_service(project_id).history(
                         limit=_int_query(query, "limit", 100),
@@ -364,12 +464,26 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
             ):
                 project_id = parts[2]
                 runtime = self._runtime_service(project_id)
+                action = parts[3]
+                if not self._require_permission(
+                    PERMISSION_OPERATE,
+                    action=action,
+                    project_id=project_id,
+                ):
+                    return
+                audit = self._request_audit(
+                    action=action,
+                    project_id=project_id,
+                    body=body,
+                )
                 if parts[3] == "connect":
                     self._send_json(
                         runtime.enqueue_connection(
                             action="connect",
                             connection_mode=connection_mode,
                             operator=operator,
+                            role=self._role(),
+                            request_audit=audit,
                         )
                     )
                 else:
@@ -378,6 +492,8 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                             action="health_check",
                             connection_mode=connection_mode,
                             operator=operator,
+                            role=self._role(),
+                            request_audit=audit,
                         )
                     )
                 return
@@ -389,6 +505,13 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
             ):
                 project_id = parts[2]
                 action = parts[4]
+                permission = OPERATION_PERMISSIONS.get(action, PERMISSION_OPERATE)
+                if not self._require_permission(
+                    permission,
+                    action=action,
+                    project_id=project_id,
+                ):
+                    return
                 if confirmation_missing(action, body):
                     self._send_json(
                         {
@@ -402,6 +525,12 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                     self._operation_runner(project_id).enqueue(
                         action,
                         operator=operator,
+                        role=self._role(),
+                        request_audit=self._request_audit(
+                            action=action,
+                            project_id=project_id,
+                            body=body,
+                        ),
                     )
                 )
                 return
@@ -415,13 +544,36 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                 project_id = parts[2]
                 job_id = parts[4]
                 store = self._job_store(project_id)
+                previous = store.get(job_id)
+                previous_action = str(previous.get("action", ""))
+                high_risk = previous_action in HIGH_RISK_JOB_ACTIONS
+                permission = (
+                    PERMISSION_RETRY_HIGH_RISK
+                    if high_risk
+                    else PERMISSION_OPERATE
+                )
+                if not self._require_permission(
+                    permission,
+                    action=f"job_{parts[5]}",
+                    project_id=project_id,
+                ):
+                    return
+                audit = self._request_audit(
+                    action=f"job_{parts[5]}",
+                    project_id=project_id,
+                    body=body,
+                    result="accepted",
+                )
                 if parts[5] == "cancel":
-                    job = store.request_cancel(job_id, operator=operator)
+                    job = store.request_cancel(
+                        job_id,
+                        operator=operator,
+                        role=self._role(),
+                        request_audit=audit,
+                    )
                 else:
-                    previous = store.get(job_id)
-                    retry_action = str(previous.get("action", ""))
                     if (
-                        retry_action in {"live_apply", "rollback_latest", "approved_recovery_job"}
+                        previous_action in HIGH_RISK_JOB_ACTIONS
                         and confirmation_missing("job_retry", body)
                     ):
                         self._send_json(
@@ -432,7 +584,12 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                             status=HTTPStatus.PRECONDITION_FAILED,
                         )
                         return
-                    job = store.retry(job_id, operator=operator)
+                    job = store.retry(
+                        job_id,
+                        operator=operator,
+                        role=self._role(),
+                        request_audit=audit,
+                    )
                 self._send_json(
                     {
                         "job": job,
@@ -449,6 +606,12 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
             ):
                 project_id = parts[2]
                 target_identity = parts[4]
+                if not self._require_permission(
+                    PERMISSION_ROLLBACK,
+                    action="recovery_history_rollback",
+                    project_id=project_id,
+                ):
+                    return
                 if confirmation_missing("recovery_history_rollback", body):
                     self._send_json(
                         {
@@ -462,6 +625,12 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                     self._operation_runner(project_id).enqueue_rollback_history(
                         target_identity,
                         operator=operator,
+                        role=self._role(),
+                        request_audit=self._request_audit(
+                            action="recovery_history_rollback",
+                            project_id=project_id,
+                            body=body,
+                        ),
                     )
                 )
                 return
@@ -474,6 +643,12 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                 project_id = parts[2]
                 request_id = parts[4]
                 action = parts[5]
+                if not self._require_permission(
+                    PERMISSION_APPROVE,
+                    action=f"approval_{action}",
+                    project_id=project_id,
+                ):
+                    return
                 confirmation_action = f"approval_{action}"
                 if confirmation_missing(confirmation_action, body):
                     self._send_json(
@@ -486,10 +661,22 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                     return
                 service = self._service(project_id)
                 runtime = self._runtime_service(project_id)
+                audit = self._request_audit(
+                    action=f"approval_{action}",
+                    project_id=project_id,
+                    body=body,
+                    request_id=request_id,
+                )
                 job = runtime.record_ui_action_job(
                     action=f"approval_{action}",
                     operator=operator,
-                    payload={"request_id": request_id, "comment_present": bool(comment)},
+                    role=self._role(),
+                    payload={
+                        "request_id": request_id,
+                        "comment_present": bool(comment),
+                        "request_audit": audit,
+                    },
+                    request_audit=audit,
                 )
                 runtime.mark_ui_action_running(
                     job["job_id"],
@@ -498,18 +685,27 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
 
                 try:
                     if action == "approve":
-                        record = service.approve(request_id, operator=operator)
+                        record = service.approve(
+                            request_id,
+                            operator=operator,
+                            role=self._role(),
+                            request_audit=audit,
+                        )
                     elif action == "reject":
                         record = service.reject(
                             request_id,
                             operator=operator,
                             comment=comment,
+                            role=self._role(),
+                            request_audit=audit,
                         )
                     elif action == "expire":
                         record = service.expire(
                             request_id,
                             operator=operator,
                             comment=comment,
+                            role=self._role(),
+                            request_audit=audit,
                         )
                     else:
                         runtime.complete_ui_action_job(
@@ -542,6 +738,8 @@ class TraceUiRequestHandler(BaseHTTPRequestHandler):
                     ).enqueue_approved_recovery(
                         request_id,
                         operator=operator,
+                        role=self._role(),
+                        request_audit=audit,
                     )
 
                 fingerprint = str(record.get("fingerprint", ""))
@@ -642,6 +840,7 @@ def build_server(
     output_root: str = "outputs/monitors",
     quiet: bool = False,
     auth_token: str = "",
+    auth_role_tokens: dict[str, str] | None = None,
     auth_enabled: bool = True,
     session_ttl_seconds: int = 8 * 60 * 60,
     start_worker: bool = False,
@@ -649,6 +848,7 @@ def build_server(
 ) -> ThreadingHTTPServer:
     auth_manager = AuthManager(
         token=auth_token,
+        role_tokens=auth_role_tokens or {},
         enabled=auth_enabled,
         session_ttl_seconds=session_ttl_seconds,
     )
@@ -677,6 +877,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-dir", default="state")
     parser.add_argument("--output-root", default="outputs/monitors")
     parser.add_argument("--auth-token-env", default="AGENTIC_TRACE_UI_TOKEN")
+    parser.add_argument("--viewer-token-env", default="AGENTIC_TRACE_UI_VIEWER_TOKEN")
+    parser.add_argument("--operator-token-env", default="AGENTIC_TRACE_UI_OPERATOR_TOKEN")
+    parser.add_argument("--approver-token-env", default="AGENTIC_TRACE_UI_APPROVER_TOKEN")
+    parser.add_argument("--admin-token-env", default="AGENTIC_TRACE_UI_ADMIN_TOKEN")
     parser.add_argument("--disable-auth", action="store_true")
     parser.add_argument("--disable-worker", action="store_true")
     parser.add_argument("--worker-poll-interval-seconds", type=float, default=1.5)
@@ -688,9 +892,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     auth_token = os.environ.get(args.auth_token_env, "")
-    if not args.disable_auth and not auth_token:
+    auth_role_tokens = {
+        "viewer": os.environ.get(args.viewer_token_env, ""),
+        "operator": os.environ.get(args.operator_token_env, ""),
+        "approver": os.environ.get(args.approver_token_env, ""),
+        "admin": os.environ.get(args.admin_token_env, ""),
+    }
+    if not args.disable_auth and not auth_token and not any(auth_role_tokens.values()):
         raise SystemExit(
             f"Trace UI auth token is required. Set {args.auth_token_env} "
+            f"or one of {args.viewer_token_env}/{args.operator_token_env}/"
+            f"{args.approver_token_env}/{args.admin_token_env} "
             "or start with --disable-auth for local development only."
         )
     server = build_server(
@@ -701,6 +913,7 @@ def main() -> None:
         output_root=args.output_root,
         quiet=args.quiet,
         auth_token=auth_token,
+        auth_role_tokens=auth_role_tokens,
         auth_enabled=not args.disable_auth,
         session_ttl_seconds=args.session_ttl_seconds,
         start_worker=not args.disable_worker,

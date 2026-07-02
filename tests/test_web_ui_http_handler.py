@@ -22,6 +22,7 @@ from web_ui.operation_runner import (
     OP_GENERATE_REPORT,
     OP_LIVE_APPLY,
     OP_ROLLBACK_LATEST,
+    OP_START_MONITOR,
 )
 from web_ui.runtime_control import (
     JOB_STATUS_CANCELED,
@@ -118,6 +119,90 @@ def test_http_high_risk_operation_requires_412_confirmation() -> None:
         assert confirmed.status == 200
         assert confirmed.json()["job"]["status"] == JOB_STATUS_QUEUED
         assert confirmed.json()["job"]["action"] == OP_LIVE_APPLY
+
+
+def test_http_role_permissions_and_job_audit_metadata() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        server, _, project_id = _setup_server(tmp)
+        server.auth_manager = server.auth_manager.__class__(
+            token="legacy-admin-token",
+            role_tokens={
+                "viewer": "viewer-token",
+                "operator": "operator-token",
+                "approver": "approver-token",
+                "admin": "admin-token",
+            },
+        )
+
+        viewer_headers = login_headers(server, operator="viewer", token="viewer-token")
+        projects = call_handler(
+            server,
+            "GET",
+            "/api/projects",
+            headers={"Cookie": viewer_headers["Cookie"]},
+        )
+        assert projects.status == 200
+        assert projects.json()["projects"][0]["project_id"] == project_id
+
+        viewer_blocked = call_handler(
+            server,
+            "POST",
+            f"/api/projects/{project_id}/operations/{OP_GENERATE_REPORT}",
+            headers=viewer_headers,
+            body={},
+        )
+        assert viewer_blocked.status == 403
+        assert viewer_blocked.json()["error"] == "permission_denied"
+        assert viewer_blocked.json()["required_permission"] == "operate"
+
+        operator_headers = login_headers(server, operator="ops@example.com", token="operator-token")
+        generated = call_handler(
+            server,
+            "POST",
+            f"/api/projects/{project_id}/operations/{OP_GENERATE_REPORT}",
+            headers={**operator_headers, "User-Agent": "rbac-test"},
+            body={},
+        )
+        assert generated.status == 200
+        job = generated.json()["job"]
+        assert job["role"] == "operator"
+        assert job["request_audit"]["operator"] == "ops@example.com"
+        assert job["request_audit"]["role"] == "operator"
+        assert job["request_audit"]["action"] == OP_GENERATE_REPORT
+        assert job["request_audit"]["project_id"] == project_id
+        assert job["request_audit"]["user_agent"] == "rbac-test"
+        assert "operator-token" not in json.dumps(job)
+
+        operator_live_apply = call_handler(
+            server,
+            "POST",
+            f"/api/projects/{project_id}/operations/{OP_LIVE_APPLY}",
+            headers=operator_headers,
+            body={"confirm": True, "confirmation_action": OP_LIVE_APPLY},
+        )
+        assert operator_live_apply.status == 403
+        assert operator_live_apply.json()["required_permission"] == "live_apply"
+
+        approver_headers = login_headers(server, operator="approver", token="approver-token")
+        approver_start = call_handler(
+            server,
+            "POST",
+            f"/api/projects/{project_id}/operations/{OP_START_MONITOR}",
+            headers=approver_headers,
+            body={},
+        )
+        assert approver_start.status == 403
+        assert approver_start.json()["required_permission"] == "operate"
+
+        approver_live_apply = call_handler(
+            server,
+            "POST",
+            f"/api/projects/{project_id}/operations/{OP_LIVE_APPLY}",
+            headers=approver_headers,
+            body={"confirm": True, "confirmation_action": OP_LIVE_APPLY},
+        )
+        assert approver_live_apply.status == 200
+        assert approver_live_apply.json()["job"]["role"] == "approver"
 
 
 def test_http_approval_approve_reject_and_expire_paths() -> None:

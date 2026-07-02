@@ -1,0 +1,28 @@
+[Unit]
+Description=Agentic Trace UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Runtime config for the Trace UI process.
+EnvironmentFile=/etc/agentic-linux-troubleshooter/trace-ui.env
+
+# Keep the UI and worker under a normal non-root account.
+User=__RUN_USER__
+Group=__RUN_GROUP__
+
+# TRACE_UI_EXTRA_ARGS may include --disable-worker for read-only observation mode.
+ExecStart=/usr/bin/env bash -lc 'cd "$PROJECT_ROOT" && exec "$PYTHON_BIN" -m web_ui.server --host "$TRACE_UI_HOST" --port "$TRACE_UI_PORT" --config "$CONFIG_PATH" --state-dir "$STATE_DIR" --output-root "$OUTPUT_ROOT" --session-ttl-seconds "$SESSION_TTL_SECONDS" --worker-poll-interval-seconds "$WORKER_POLL_INTERVAL_SECONDS" $TRACE_UI_EXTRA_ARGS'
+
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -255,7 +255,9 @@ class ApprovalStore:
         request_id: str,
         *,
         operator: str = "",
+        role: str = "",
         comment: str = "",
+        request_audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         request = self._request_by_id(request_id)
         current_status = self.current_status(request_id)
@@ -266,8 +268,10 @@ class ApprovalStore:
             request=request,
             status=status,
             operator=operator,
+            role=role,
             comment=comment,
             reason=reason,
+            request_audit=request_audit,
         )
         self._append(decision)
         self._trace_decision(decision)
@@ -278,16 +282,20 @@ class ApprovalStore:
         request_id: str,
         *,
         operator: str = "",
+        role: str = "",
         comment: str = "",
         reason: str = "operator_rejected",
+        request_audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         request = self._request_by_id(request_id)
         decision = self._decision_record(
             request=request,
             status=APPROVAL_STATUS_REJECTED,
             operator=operator,
+            role=role,
             comment=comment,
             reason=reason,
+            request_audit=request_audit,
         )
         self._append(decision)
         self._trace_decision(decision)
@@ -298,16 +306,20 @@ class ApprovalStore:
         request_id: str,
         *,
         operator: str = "",
+        role: str = "",
         comment: str = "",
         reason: str = "approval_expired",
+        request_audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         request = self._request_by_id(request_id)
         decision = self._decision_record(
             request=request,
             status=APPROVAL_STATUS_EXPIRED,
             operator=operator,
+            role=role,
             comment=comment,
             reason=reason,
+            request_audit=request_audit,
         )
         self._append(decision)
         self._trace_decision(decision)
@@ -319,6 +331,7 @@ class ApprovalStore:
         *,
         status: str,
         operator: str = "",
+        role: str = "",
         job_id: str = "",
         summary: str = "",
         reason: str = "",
@@ -342,6 +355,7 @@ class ApprovalStore:
             "request_id": request["request_id"],
             "status": status,
             "operator": operator,
+            "role": role,
             "job_id": job_id,
             "execution_summary": summary,
             "execution_reason": reason,
@@ -436,8 +450,10 @@ class ApprovalStore:
         request: dict[str, Any],
         status: str,
         operator: str,
+        role: str,
         comment: str,
         reason: str,
+        request_audit: dict[str, Any] | None,
     ) -> dict[str, Any]:
         return {
             "schema_version": APPROVAL_SCHEMA_VERSION,
@@ -448,6 +464,7 @@ class ApprovalStore:
             "request_id": request["request_id"],
             "status": status,
             "operator": operator,
+            "role": role,
             "comment": comment,
             "decision_reason": reason,
             "event_type": request.get("event_type", ""),
@@ -455,6 +472,7 @@ class ApprovalStore:
             "selected_fix_id": request.get("selected_fix_id", ""),
             "approval_scope": request.get("approval_scope", ""),
             "approvable": request.get("approvable", False),
+            "request_audit": _jsonable(dict(request_audit or {})),
         }
 
     def _trace_decision(self, decision: dict[str, Any]) -> None:
@@ -473,6 +491,8 @@ class ApprovalStore:
                 "selected_fix_id": decision.get("selected_fix_id", ""),
                 "decision_reason": decision.get("decision_reason", ""),
                 "operator": decision.get("operator", ""),
+                "role": decision.get("role", ""),
+                "request_audit": decision.get("request_audit", {}),
             },
         )
 

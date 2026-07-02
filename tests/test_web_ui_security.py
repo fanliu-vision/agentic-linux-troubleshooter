@@ -9,7 +9,18 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from monitors.project_registry import ProjectRegistry
 from web_ui.runtime_control import _parse_run_command
-from web_ui.security import AuthManager, confirmation_missing
+from web_ui.security import (
+    AuthManager,
+    PERMISSION_APPROVE,
+    PERMISSION_LIVE_APPLY,
+    PERMISSION_OPERATE,
+    PERMISSION_READ,
+    ROLE_ADMIN,
+    ROLE_APPROVER,
+    ROLE_OPERATOR,
+    ROLE_VIEWER,
+    confirmation_missing,
+)
 
 
 def test_auth_manager_login_session_and_csrf() -> None:
@@ -21,6 +32,8 @@ def test_auth_manager_login_session_and_csrf() -> None:
     context = manager.login(token="secret-token", operator="alice@example.com")
     assert context.authenticated is True
     assert context.operator == "alice@example.com"
+    assert context.role == ROLE_ADMIN
+    assert PERMISSION_OPERATE in context.permissions
     assert manager.validate_csrf(context, context.csrf_token) is True
     assert manager.validate_csrf(context, "wrong") is False
 
@@ -28,6 +41,38 @@ def test_auth_manager_login_session_and_csrf() -> None:
     assert "HttpOnly" in cookie
     assert "SameSite=Strict" in cookie
     assert manager.authenticate(cookie).operator == "alice@example.com"
+
+
+def test_auth_manager_role_tokens_and_permissions() -> None:
+    manager = AuthManager(
+        token="legacy-admin",
+        enabled=True,
+        role_tokens={
+            ROLE_VIEWER: "viewer-token",
+            ROLE_OPERATOR: "operator-token",
+            ROLE_APPROVER: "approver-token",
+            ROLE_ADMIN: "admin-token",
+        },
+    )
+
+    viewer = manager.login(token="viewer-token", operator="viewer")
+    assert viewer.authenticated is True
+    assert viewer.role == ROLE_VIEWER
+    assert viewer.permissions == (PERMISSION_READ,)
+
+    operator = manager.login(token="operator-token", operator="operator")
+    assert operator.role == ROLE_OPERATOR
+    assert PERMISSION_OPERATE in operator.permissions
+    assert PERMISSION_APPROVE not in operator.permissions
+
+    approver = manager.login(token="approver-token", operator="approver")
+    assert approver.role == ROLE_APPROVER
+    assert PERMISSION_APPROVE in approver.permissions
+    assert PERMISSION_LIVE_APPLY in approver.permissions
+    assert PERMISSION_OPERATE not in approver.permissions
+
+    legacy = manager.login(token="legacy-admin", operator="admin")
+    assert legacy.role == ROLE_ADMIN
 
 
 def test_high_risk_confirmation_requires_exact_action() -> None:

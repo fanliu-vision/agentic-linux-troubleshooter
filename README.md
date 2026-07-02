@@ -241,6 +241,24 @@ export AGENTIC_TRACE_UI_TOKEN="<set-a-local-token>"
 
 浏览器访问 `http://127.0.0.1:8765`，登录时输入启动前设置的 `AGENTIC_TRACE_UI_TOKEN`。UI 会创建登录会话并使用 CSRF token 保护非 GET 请求；`--disable-auth` 只适合本机临时开发。
 
+如果刚运行过 `scripts/run_browser_tests.sh` 后发现 `http://127.0.0.1:8765` 打不开，通常是因为浏览器测试只会启动临时随机端口的测试 server，测试结束后会自动关闭。日常查看 Trace UI 仍需使用上面的命令或 systemd service 单独启动；可用 `ss -ltnp | grep ':8765'` 确认端口是否正在监听。
+
+Trace UI 也支持可选角色 token，未配置角色 token 时 `AGENTIC_TRACE_UI_TOKEN` 仍按 admin token 兼容：
+
+```bash
+export AGENTIC_TRACE_UI_VIEWER_TOKEN="<viewer-token>"
+export AGENTIC_TRACE_UI_OPERATOR_TOKEN="<operator-token>"
+export AGENTIC_TRACE_UI_APPROVER_TOKEN="<approver-token>"
+export AGENTIC_TRACE_UI_ADMIN_TOKEN="<admin-token>"
+```
+
+角色边界：
+
+- `viewer`：只读查看。
+- `operator`：连接、健康检查、启动/停止 monitor、刷新日志、生成报告、dry-run 和普通 job 操作。
+- `approver`：审批、live apply、rollback 和高风险 job 重试。
+- `admin`：全部权限。
+
 Worker 模式：
 
 - 默认模式：不传 `--disable-worker`，UI server 会启动内嵌 worker，处理 `generate_report`、`dry_run_recovery`、`approved_recovery_job`、`live_apply`、`rollback_latest` 等任务。
@@ -253,6 +271,27 @@ Worker 模式：
 - 需要团队访问时，建议放在 HTTPS 反向代理后面，并保留 `AGENTIC_TRACE_UI_TOKEN` 鉴权；不要把 `--disable-auth` 暴露到共享网络。
 - 生产观察期建议继续保持项目配置里的 `auto_recovery_dry_run: true`，先验证事件、报告、审批、恢复历史和 rollback 元数据。
 - `state/` 和 `outputs/monitors/` 是运行数据目录，应挂载到持久化磁盘并纳入日志/备份策略，但不要提交到 Git。
+
+Trace UI systemd 部署：
+
+```bash
+export AGENTIC_TRACE_UI_TOKEN="<admin-token>"
+scripts/install_trace_ui_service.sh lf lf
+systemctl status agentic-trace-ui.service --no-pager -l
+```
+
+部署前检查：
+
+```bash
+.venv/bin/python scripts/preflight_deploy.py \
+  --project-root "$PWD" \
+  --python-bin "$PWD/.venv/bin/python" \
+  --config "$PWD/configs/projects.yaml" \
+  --state-dir "$PWD/state" \
+  --output-root "$PWD/outputs/monitors" \
+  --host 127.0.0.1 \
+  --port 8765
+```
 
 只读与高风险边界：
 
@@ -267,6 +306,31 @@ Worker 模式：
 
 ```bash
 scripts/run_core_tests.sh
+```
+
+浏览器回归不属于 core baseline，需安装 Playwright 浏览器后单独运行：
+
+```bash
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m playwright install chromium
+scripts/run_browser_tests.sh
+```
+
+如需更新浏览器截图 baseline：
+
+```bash
+AGENTIC_UPDATE_BROWSER_BASELINES=1 scripts/run_browser_tests.sh
+```
+
+真实日志 shadow gate：
+
+```bash
+.venv/bin/python scripts/r17_real_log_shadow_evaluate.py \
+  --manifest /path/to/sanitized/manifest.json \
+  --output-dir outputs/r18_real_log_shadow/<run_id>
+
+.venv/bin/python scripts/r18_real_log_shadow_gate.py \
+  --summary outputs/r18_real_log_shadow/<run_id>
 ```
 
 关键专项测试：
@@ -299,6 +363,7 @@ scripts/run_core_tests.sh
 - R16 safe_auto_recover 域已扩展到 11 个低风险配置降级域，包括 optional integration、cache backend、notification sink、observability exporter、queue backpressure 和 worker overload 等。
 - R16-S2 3-day long-cycle shadow validation 已完成 288/288 个周期，结论 `PASS`；期间 `remote_apply_fix_called=False`、`rerun_remote_project_called=False`、`exception_count=0`。
 - R16-S2 是 fixture / generated config shadow validation，用于验证策略、gate、precheck、forbidden、no-op 和 rollback metadata 稳定性；它不等同于真实生产日志代表性验证。
+- R18 下一阶段执行手册已加入 `docs/r18_next_stage_runbook.md`，覆盖真实日志 shadow、72 小时 dry-run 观察、Trace UI systemd 部署、RBAC/审计和 Playwright 回归。
 
 ## 9. 项目定位
 

@@ -151,8 +151,15 @@ class OperationRunner:
         action: str,
         *,
         operator: str = "web-ui",
+        role: str = "",
+        request_audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        response = self.enqueue(action, operator=operator)
+        response = self.enqueue(
+            action,
+            operator=operator,
+            role=role,
+            request_audit=request_audit,
+        )
         job = response.get("job") or {}
         if job.get("status") == JOB_STATUS_BLOCKED:
             return response
@@ -163,16 +170,20 @@ class OperationRunner:
         action: str,
         *,
         operator: str = "web-ui",
+        role: str = "",
         payload: dict[str, Any] | None = None,
+        request_audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         action = action.strip()
         job = self.job_store.create(
             action=action,
             operator=operator,
+            role=role,
             payload={
                 "label": OPERATION_LABELS.get(action, action),
                 **dict(payload or {}),
             },
+            request_audit=request_audit,
             runtime_status=self._current_runtime_status(),
             summary=f"{OPERATION_LABELS.get(action, action)} queued",
             timeout_seconds=_operation_timeout_seconds(action),
@@ -198,10 +209,14 @@ class OperationRunner:
         target_identity: str,
         *,
         operator: str = "web-ui",
+        role: str = "",
+        request_audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.enqueue(
             OP_ROLLBACK_LATEST,
             operator=operator,
+            role=role,
+            request_audit=request_audit,
             payload={
                 "label": OPERATION_LABELS[OP_ROLLBACK_LATEST],
                 "target_identity": target_identity.strip(),
@@ -213,10 +228,14 @@ class OperationRunner:
         request_id: str,
         *,
         operator: str = "web-ui",
+        role: str = "",
+        request_audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.enqueue(
             APPROVED_RECOVERY_JOB_ACTION,
             operator=operator,
+            role=role,
+            request_audit=request_audit,
             payload={
                 "label": "审批后执行",
                 "request_id": request_id.strip(),

@@ -22,13 +22,13 @@ Run the core baseline with:
 scripts/run_core_tests.sh
 ```
 
-The script first runs `py_compile` on the monitor, notification, auto-recovery, and cycle-summary modules that anchor the current core baseline. It then runs:
+The script first runs `py_compile` on the monitor, notification, auto-recovery, web UI, deployment preflight, and shadow gate modules that anchor the current core baseline. It then runs:
 
 ```bash
 .venv/bin/python -m pytest tests -q
 ```
 
-The default pytest configuration excludes tests marked as `integration`, `manual`, or `slow`.
+The default pytest configuration excludes tests marked as `integration`, `manual`, `slow`, `browser`, or `e2e`.
 
 ## Core Baseline Tests
 
@@ -54,6 +54,7 @@ The following test classes are not part of the core pytest baseline:
 - long-running daemon or watch tests
 - manual tests that require sudo
 - localhost SSH or external-service integration checks
+- Playwright browser / visual regression checks
 
 D1-mini PARTIAL is an exploratory long-running result and does not block the core test baseline.
 

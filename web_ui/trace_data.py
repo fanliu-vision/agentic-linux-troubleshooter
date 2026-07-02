@@ -197,36 +197,63 @@ class TraceUiDataService:
             "report_center": self._report_store().grouped_for_event(fingerprint),
         }
 
-    def approve(self, request_id: str, operator: str = "web-ui") -> dict[str, Any]:
+    def approve(
+        self,
+        request_id: str,
+        operator: str = "web-ui",
+        role: str = "",
+        request_audit: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         return ApprovalStore(
             project_id=self.project_id,
             state_dir=self.state_dir,
             trace_store=TraceStore(self.project_id, self.state_dir),
-        ).approve(request_id, operator=operator)
+        ).approve(
+            request_id,
+            operator=operator,
+            role=role,
+            request_audit=request_audit,
+        )
 
     def reject(
         self,
         request_id: str,
         operator: str = "web-ui",
         comment: str = "",
+        role: str = "",
+        request_audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return ApprovalStore(
             project_id=self.project_id,
             state_dir=self.state_dir,
             trace_store=TraceStore(self.project_id, self.state_dir),
-        ).reject(request_id, operator=operator, comment=comment)
+        ).reject(
+            request_id,
+            operator=operator,
+            comment=comment,
+            role=role,
+            request_audit=request_audit,
+        )
 
     def expire(
         self,
         request_id: str,
         operator: str = "web-ui",
         comment: str = "",
+        role: str = "",
+        request_audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return ApprovalStore(
             project_id=self.project_id,
             state_dir=self.state_dir,
             trace_store=TraceStore(self.project_id, self.state_dir),
-        ).expire(request_id, operator=operator, comment=comment)
+        ).expire(
+            request_id,
+            operator=operator,
+            comment=comment,
+            role=role,
+            request_audit=request_audit,
+        )
 
     def _trace_records(self) -> list[dict[str, Any]]:
         return read_jsonl(self.trace_path)
